@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 
@@ -10,6 +11,7 @@ from numpy.typing import NDArray
 
 from percell4.application.session import Session
 from percell4.domain.errors import NoDatasetError
+from percell4.domain.flim.wavelet_filter import WaveletParams
 from percell4.ports.dataset_repository import DatasetRepository
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,7 @@ class WaveletResult:
     channel: str
     filter_level: int
     n_valid: int
+    params: WaveletParams = WaveletParams.leelab()
 
 
 class ApplyWavelet:
@@ -32,6 +35,12 @@ class ApplyWavelet:
 
     Reads unfiltered phasor G/S + intensity from the repository,
     runs wavelet denoising, writes filtered results.
+
+    The algorithm variant (LeeLab reference, strict paper BiShrink, or a
+    custom mix of their levers) is a :class:`WaveletParams`; it is stamped
+    on ``g_filtered`` / ``s_filtered`` as the ``wavelet_method`` and
+    ``wavelet_params`` (JSON) attrs next to ``filter_level`` so the cache
+    gate can tell a same-level result computed with a different variant.
     """
 
     def __init__(self, repo: DatasetRepository, session: Session) -> None:
@@ -49,7 +58,11 @@ class ApplyWavelet:
         return dict(handle.metadata)
 
     def execute(
-        self, channel: str, filter_level: int = 9, view_bin: int = 1
+        self,
+        channel: str,
+        filter_level: int = 9,
+        view_bin: int = 1,
+        params: WaveletParams | None = None,
     ) -> WaveletResult:
         """Apply wavelet denoising to phasor G/S maps for ``channel``.
 
@@ -57,7 +70,11 @@ class ApplyWavelet:
         decay used for intensity weighting are all read at the binned
         resolution -- the store dispatch handles the per-path rule
         (mean_bin for /phasor/*, sum_bin_decay for /decay/*).
+
+        ``params`` selects the algorithm variant; ``None`` is the LeeLab
+        reference (the historical behaviour).
         """
+        params = params or WaveletParams.leelab()
         handle = self._session.dataset
         if handle is None:
             raise NoDatasetError("No dataset loaded")
@@ -136,6 +153,7 @@ class ApplyWavelet:
             res = denoise_phasor(
                 g2d.astype(np.float64), s2d.astype(np.float64),
                 _intensity_frame(tp), filter_level=filter_level, omega=omega,
+                params=params,
             )
             return _upsample(res["G"]), _upsample(res["S"]), _upsample(res.get("T"))
 
@@ -163,6 +181,8 @@ class ApplyWavelet:
         # Write filtered results (dims tracks the time-lapse layout).
         write_attrs: dict = {
             "dims": dims, "channel": channel, "filter_level": filter_level,
+            "wavelet_method": params.method,
+            "wavelet_params": json.dumps(params.to_dict()),
         }
         if view_bin > 1:
             write_attrs["created_at_bin"] = int(view_bin)
@@ -186,5 +206,5 @@ class ApplyWavelet:
         return WaveletResult(
             g_filtered=g_filtered, s_filtered=s_filtered,
             lifetime=lifetime, channel=channel,
-            filter_level=filter_level, n_valid=n_valid,
+            filter_level=filter_level, n_valid=n_valid, params=params,
         )

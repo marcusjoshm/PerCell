@@ -1,27 +1,53 @@
 """DTCWT-based wavelet filtering for FLIM phasor data.
 
-Faithful match to the reference ``ComplexWaveletFilter.py`` (LeeLabBCM):
-Anscombe → DTCWT (``biort='Legall'``, ``qshift='qshift_a'``) → inter-scale
-Wiener-like shrinkage → inverse DTCWT → inverse Anscombe, followed by the
-reference's phasor recovery (divide by filtered intensity, ``nan_to_num``,
-threshold by *unfiltered* intensity, clip to ``[-0.1, 1.1]``). The math is
-vectorized with numpy/scipy for ~100x speedup over the reference's nested
-Python loops, but produces output identical to the reference to float
-precision (verified against ``dataset_CWFlevels=9.npz``: G ~1e-8, S ~1e-5).
+One parameterised kernel serves two reference algorithms, selected (and
+tweaked) through :class:`WaveletParams`:
 
-Three details are load-bearing for that identity and must not drift from
-the reference: the Anscombe clamp order (``2√(max(data,0)+3/8)``), the
-*unclamped* inverse Anscombe (clamping is deferred to ``nan_to_num`` +
-clip in :func:`denoise_phasor`), and the ``Legall`` biorthogonal basis.
+* **LeeLab** (``WaveletParams.leelab()``, the default) — a faithful match
+  to the reference ``ComplexWaveletFilter.py`` (LeeLabBCM):
+  Anscombe → DTCWT (``biort='Legall'``, ``qshift='qshift_a'``) → inter-scale
+  Wiener-like shrinkage → inverse DTCWT → inverse Anscombe, followed by the
+  reference's phasor recovery (divide by filtered intensity, ``nan_to_num``,
+  threshold by *unfiltered* intensity, clip to ``[-0.1, 1.1]``). The math is
+  vectorized with numpy/scipy for ~100x speedup over the reference's nested
+  Python loops, but produces output identical to the reference to float
+  precision (verified against ``dataset_CWFlevels=9.npz``: G ~1e-8, S ~1e-5).
+  Three details are load-bearing for that identity and must not drift from
+  the reference: the Anscombe clamp order (``2√(max(data,0)+3/8)``), the
+  *unclamped* inverse Anscombe (clamping is deferred to ``nan_to_num`` +
+  clip in :func:`denoise_phasor`), and the ``Legall`` biorthogonal basis.
+  ``tests/test_domain/fixtures/wavelet_leelab_golden.npz`` pins this path.
+
+* **Paper** (``WaveletParams.paper()``) — a strict reading of Wang et al.,
+  "Complex wavelet filter improves FLIM phasors for photon starved imaging
+  experiments", Biomed. Opt. Express 12(6) 3463 (2021) and its supplement
+  (``docs/reference/boe-12-6-3463.pdf``, ``docs/reference/5174492.pdf``):
+  BiShrink after Sendur & Selesnick. The global noise σ is the MAD of the
+  finest-level ±45° bands (supplement eq. 1), the local energy σn² is a
+  7×7 mean of |Φ|² (eq. 2), and each coefficient is scaled by
+  ``(1 − √3·σ² / (√(|Φ|²+|Φparent|²) · √(σn²−σ²)₊))₊`` (eq. 3).
+
+The LeeLab script departs from the paper in several places (which bands
+feed the MAD, the power of σ in the threshold, whether the local variance
+divides the threshold or only gates it, a regulariser under the root, the
+inverse-Anscombe flavour, the Anscombe clamp order, the window size). Each
+departure is one field on :class:`WaveletParams`, so the GUI and the batch
+CLI can flip them one at a time and see which piece moves a dataset.
 
 Requires the optional ``dtcwt`` package: ``pip install dtcwt>=0.14.0``
 """
 
 from __future__ import annotations
 
+import logging
+from dataclasses import asdict, dataclass, fields, replace
+from typing import Any
+
 import numpy as np
 from numpy.typing import NDArray
 from scipy.ndimage import uniform_filter
+
+logger = logging.getLogger(__name__)
 
 # Maximum wavelet decomposition depth offered to users. The GUI spinbox and
 # the batch CLIs (percell4-batch-phasor / batch_compute_phasor) share this one
@@ -32,33 +58,264 @@ from scipy.ndimage import uniform_filter
 # finite up to 35+ on images down to 64x64; raise further if a workflow needs it.
 MAX_FILTER_LEVEL = 30
 
+# dtcwt packs the six oriented subbands as [15°, 45°, 75°, 105°, 135°, 165°];
+# indices 1 and 4 are the ±45° (HH, "horizontally and vertically high-pass")
+# pair the paper's supplement uses for the global noise estimate.
+DIAGONAL_BANDS = (1, 4)
+
+# ── Parameters ─────────────────────────────────────────────────
+
+NOISE_BANDS = ("all", "finest_diagonal")
+LOCAL_VARIANCE = ("gate", "divide")
+BIORT = ("Legall", "near_sym_a", "near_sym_b")
+ANSCOMBE_CLAMP = ("before", "after")
+INVERSE_ANSCOMBE = ("exact", "algebraic")
+METHODS = ("leelab", "paper", "custom")
+
+
+@dataclass(frozen=True)
+class WaveletParams:
+    """Every lever on which the LeeLab script and the paper differ.
+
+    ``method`` is a label for the preset the values came from (``leelab``,
+    ``paper``, or ``custom`` once any lever is moved); it does not affect
+    the computation. Compare two configurations with
+    :meth:`same_computation`, which ignores the label.
+
+    Fields
+    ------
+    noise_bands
+        Which coefficients feed the global MAD noise estimate. ``all`` is
+        the LeeLab script (mean over every level and band of the median
+        magnitude). ``finest_diagonal`` is the paper (one median over the
+        finest-level ±45° bands).
+    sigma_exponent
+        Power of σ in the threshold numerator ``√3·σ^p``. The paper uses the
+        variance (``2.0``); the LeeLab script takes the square root of the
+        MAD-derived σ (``0.5``).
+    local_variance
+        ``divide``: the threshold is divided by the local signal std
+        ``√(σn²−σ²)₊`` (BiShrink with local variance estimation, the paper).
+        ``gate``: the local energy only gates which pixels are shrunk at
+        all; the threshold is global (LeeLab).
+    regularize
+        Add the threshold under the root of the bivariate magnitude
+        (LeeLab) instead of using the plain ``√(|Φ|²+|Φparent|²)`` (paper).
+    window_radius
+        Radius of the square window for the local energy. ``0`` means the
+        LeeLab rule (radius = number of levels, or 3 above 10 levels); the
+        paper preset uses 3 (a 7×7 window, Sendur & Selesnick's choice).
+        Only matters with ``local_variance="divide"``: under ``gate`` the
+        window merely decides whether *any* energy is nearby.
+    biort
+        First-level biorthogonal basis. Both presets use ``Legall`` (the
+        paper's LeGall 5,3); ``near_sym_a``/``near_sym_b`` are offered for
+        comparison. Higher levels always use the 10-tap ``qshift_a``.
+    anscombe_clamp
+        ``before``: ``2√(max(x,0)+3/8)`` (LeeLab). ``after``:
+        ``2√(max(x+3/8,0))``, the paper's eq. 6 with a clamp only where the
+        root would be undefined. They differ for every negative ``x``
+        (negative Fourier coordinates ``G·I`` at noisy pixels): ``before``
+        maps all of them to ``2√(3/8)``, ``after`` keeps them down to
+        ``−3/8`` and maps anything below that to 0.
+    inverse_anscombe
+        ``exact``: the sixth-order unbiased rational inverse (LeeLab).
+        ``algebraic``: ``(y/2)² − 3/8``, the literal inverse of eq. 6.
+    shrink_coarsest
+        Also shrink the coarsest highpass level (which has no parent, so
+        only its own magnitude enters). Both presets leave it untouched,
+        as Sendur & Selesnick's reference code does.
+    """
+
+    method: str = "leelab"
+    noise_bands: str = "all"
+    sigma_exponent: float = 0.5
+    local_variance: str = "gate"
+    regularize: bool = True
+    window_radius: int = 0
+    biort: str = "Legall"
+    anscombe_clamp: str = "before"
+    inverse_anscombe: str = "exact"
+    shrink_coarsest: bool = False
+
+    def __post_init__(self) -> None:
+        _check_choice("method", self.method, METHODS)
+        _check_choice("noise_bands", self.noise_bands, NOISE_BANDS)
+        _check_choice("local_variance", self.local_variance, LOCAL_VARIANCE)
+        _check_choice("biort", self.biort, BIORT)
+        _check_choice("anscombe_clamp", self.anscombe_clamp, ANSCOMBE_CLAMP)
+        _check_choice("inverse_anscombe", self.inverse_anscombe, INVERSE_ANSCOMBE)
+        if not np.isfinite(self.sigma_exponent) or self.sigma_exponent < 0:
+            raise ValueError(
+                f"sigma_exponent must be a finite non-negative number, "
+                f"got {self.sigma_exponent!r}"
+            )
+        if self.window_radius < 0:
+            raise ValueError(
+                f"window_radius must be >= 0 (0 = LeeLab rule), "
+                f"got {self.window_radius!r}"
+            )
+
+    # ── Presets ──
+
+    @classmethod
+    def leelab(cls) -> WaveletParams:
+        """The reference ``ComplexWaveletFilter.py`` behaviour (default)."""
+        return cls()
+
+    @classmethod
+    def paper(cls) -> WaveletParams:
+        """Strict Wang et al. 2021 / Sendur & Selesnick BiShrink."""
+        return cls(
+            method="paper",
+            noise_bands="finest_diagonal",
+            sigma_exponent=2.0,
+            local_variance="divide",
+            regularize=False,
+            window_radius=3,
+            biort="Legall",
+            anscombe_clamp="after",
+            inverse_anscombe="algebraic",
+            shrink_coarsest=False,
+        )
+
+    @classmethod
+    def preset(cls, name: str) -> WaveletParams:
+        """Look up a preset by name (``leelab`` or ``paper``)."""
+        if name == "leelab":
+            return cls.leelab()
+        if name == "paper":
+            return cls.paper()
+        raise ValueError(
+            f"Unknown wavelet preset {name!r}; expected 'leelab' or 'paper'"
+        )
+
+    # ── Serialisation ──
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WaveletParams:
+        """Build from a dict (e.g. an HDF5 attr or CLI overrides).
+
+        Unknown keys raise ``ValueError``. Values are coerced to the field
+        type so string-valued overrides such as ``regularize=false`` or
+        ``window_radius=3`` work.
+        """
+        known = {f.name: f.type for f in fields(cls)}
+        unknown = set(data) - set(known)
+        if unknown:
+            raise ValueError(
+                f"Unknown wavelet parameter(s): {sorted(unknown)}; "
+                f"expected one of {sorted(known)}"
+            )
+        coerced: dict[str, Any] = {}
+        for key, value in data.items():
+            coerced[key] = _coerce(key, value, known[key])
+        built = cls(**coerced)
+        if "method" not in data:
+            # Partial dicts (CLI overrides) carry no label: derive it.
+            built = built.with_overrides()
+        return built
+
+    def with_overrides(self, **overrides: Any) -> WaveletParams:
+        """Copy with some levers changed; the label becomes ``custom``
+        unless the result still equals a preset."""
+        candidate = replace(self, **overrides)
+        for name in ("leelab", "paper"):
+            preset = self.preset(name)
+            if candidate.same_computation(preset):
+                return replace(candidate, method=name)
+        return replace(candidate, method="custom")
+
+    def levers(self) -> dict[str, Any]:
+        """The fields that affect the computation (everything but the label)."""
+        d = self.to_dict()
+        d.pop("method")
+        return d
+
+    def same_computation(self, other: WaveletParams) -> bool:
+        return self.levers() == other.levers()
+
+    def label(self) -> str:
+        """Short human-readable name for status lines."""
+        return {"leelab": "LeeLab", "paper": "Paper", "custom": "Custom"}[
+            self.method
+        ]
+
+
+def _check_choice(name: str, value: Any, choices: tuple[str, ...]) -> None:
+    if value not in choices:
+        raise ValueError(f"{name} must be one of {choices}, got {value!r}")
+
+
+def _coerce(key: str, value: Any, type_name: Any) -> Any:
+    """Coerce a loosely typed value (JSON/CLI string) to the field's type."""
+    # ``fields()`` reports annotations as strings under ``from __future__``.
+    tname = type_name if isinstance(type_name, str) else getattr(
+        type_name, "__name__", str(type_name)
+    )
+    if tname == "bool":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            low = value.strip().lower()
+            if low in ("true", "1", "yes", "on"):
+                return True
+            if low in ("false", "0", "no", "off"):
+                return False
+        raise ValueError(f"{key} must be a boolean, got {value!r}")
+    if tname == "int":
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be an integer, got {value!r}") from exc
+    if tname == "float":
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be a number, got {value!r}") from exc
+    return str(value)
+
+
 # ── Transforms ─────────────────────────────────────────────────
 
 
-def anscombe_transform(data):
+def anscombe_transform(data, clamp: str = "before"):
     """Anscombe transform to stabilize Poisson noise variance.
 
-    Clamps ``data`` to non-negative *before* adding 3/8, matching
-    ``ComplexWaveletFilter.anscombe_transform`` exactly. (Adding 3/8 first
-    and clamping after differs only for ``data < -3/8`` — negative
-    Fourier coordinates ``G*I`` at noisy pixels — but that difference is
-    enough to perturb the filtered phasor by ~0.02, so the order matters.)
+    ``clamp="before"`` clamps ``data`` to non-negative *before* adding 3/8,
+    matching ``ComplexWaveletFilter.anscombe_transform`` exactly.
+    ``clamp="after"`` adds 3/8 first and clamps the radicand, which is the
+    paper's eq. 6 as written. They differ for every negative input —
+    negative Fourier coordinates ``G*I`` at noisy pixels — and that
+    difference is enough to perturb the filtered phasor by ~0.02.
     """
-    return 2 * np.sqrt(np.maximum(data, 0) + (3 / 8))
+    if clamp == "before":
+        return 2 * np.sqrt(np.maximum(data, 0) + (3 / 8))
+    if clamp == "after":
+        return 2 * np.sqrt(np.maximum(data + (3 / 8), 0))
+    _check_choice("anscombe_clamp", clamp, ANSCOMBE_CLAMP)
+    raise AssertionError("unreachable")
 
 
-def reverse_anscombe_transform(y):
-    """Inverse Anscombe transform (sixth-order rational approximation).
+def reverse_anscombe_transform(y, method: str = "exact"):
+    """Inverse Anscombe transform.
 
-    Faithful to ``ComplexWaveletFilter.reverse_anscombe_transform``: no
+    ``method="exact"`` is the sixth-order rational (unbiased) inverse,
+    faithful to ``ComplexWaveletFilter.reverse_anscombe_transform``: no
     clamping of ``y`` and no flooring of the result. Small or non-positive
     reconstructed values therefore yield inf/NaN here, exactly as in the
     reference; :func:`denoise_phasor` sweeps them up with ``nan_to_num`` +
-    clip during phasor recovery (mirroring the reference's
-    ``process_files``). ``errstate`` only silences the divide/invalid
-    warnings — it does not alter the produced values.
+    clip during phasor recovery. ``method="algebraic"`` is the literal
+    inverse of the forward transform, ``(y/2)² − 3/8``.
     """
     y = np.asarray(y, dtype=np.float64)
+    if method == "algebraic":
+        return (y / 2.0) ** 2 - (3 / 8)
+    if method != "exact":
+        _check_choice("inverse_anscombe", method, INVERSE_ANSCOMBE)
     with np.errstate(divide="ignore", invalid="ignore"):
         return (
             (y**2 / 4)
@@ -72,8 +329,9 @@ def reverse_anscombe_transform(y):
 # ── Noise estimation (vectorized) ─────────────────────────────
 
 
-def calculate_median_values(transformed_data):
-    """Calculate median absolute values of wavelet coefficients."""
+def calculate_median_values(transformed_data) -> float:
+    """LeeLab global estimate: mean over every level and band of the median
+    absolute coefficient."""
     median_values = []
     for level in range(len(transformed_data.highpasses)):
         highpasses = transformed_data.highpasses[level]
@@ -81,115 +339,149 @@ def calculate_median_values(transformed_data):
             coeffs = highpasses[:, :, band]
             median_absolute = np.median(np.abs(coeffs))
             median_values.append(median_absolute)
-    return np.mean(median_values)
+    return float(np.mean(median_values))
 
 
-def calculate_local_noise_variance(transformed_data, n_levels):
-    """Calculate local noise variance using vectorized uniform filter.
+def estimate_noise_sigma(transformed_data, noise_bands: str = "all") -> float:
+    """Global noise standard deviation σ from a MAD-style estimate.
 
-    Replaces the nested Python loop with scipy.ndimage.uniform_filter
-    for ~100x speedup. Mathematically equivalent: computes mean of
-    |coeffs|^2 in a (2*ws+1) x (2*ws+1) window around each pixel.
+    ``all`` (LeeLab): ``mean(median|Φ|) / 0.6745`` over every level and
+    band. ``finest_diagonal`` (paper, supplement eq. 1): one median over the
+    finest-level ±45° bands, divided by 0.6745.
     """
-    sigma_n_squared_matrices = []
-    window_size = 3 if n_levels > 10 else n_levels
-    kernel = 2 * window_size + 1  # convert radius to diameter for uniform_filter
+    if noise_bands == "finest_diagonal":
+        finest = transformed_data.highpasses[0]
+        mags = np.concatenate(
+            [np.abs(finest[:, :, b]).ravel() for b in DIAGONAL_BANDS]
+        )
+        return float(np.median(mags)) / 0.6745
+    if noise_bands != "all":
+        _check_choice("noise_bands", noise_bands, NOISE_BANDS)
+    return calculate_median_values(transformed_data) / 0.6745
 
+
+def calculate_local_noise_variance(
+    transformed_data, n_levels: int, window_radius: int = 0
+) -> list[list[NDArray]]:
+    """Local energy σn²: mean of |Φ|² in a ``(2r+1)×(2r+1)`` window.
+
+    Returns ``result[level][band]``. ``window_radius=0`` applies the LeeLab
+    rule (``r = n_levels``, or 3 when ``n_levels > 10``). Vectorized with
+    ``scipy.ndimage.uniform_filter`` (zero-padded, like the reference's
+    edge-clipped windows only in the interior — identical to the reference
+    output to float precision on the verified dataset).
+    """
+    if window_radius > 0:
+        ws = window_radius
+    else:
+        ws = 3 if n_levels > 10 else n_levels
+    kernel = 2 * ws + 1  # convert radius to diameter for uniform_filter
+
+    out: list[list[NDArray]] = []
     for level in range(len(transformed_data.highpasses)):
         highpasses = transformed_data.highpasses[level]
+        per_band = []
         for band in range(highpasses.shape[2]):
-            coeffs = highpasses[:, :, band]
-            # uniform_filter computes the mean over the kernel — same as
-            # the original nested loop: mean(|window|^2)
-            abs_sq = np.abs(coeffs) ** 2
-            snq = uniform_filter(abs_sq.real, size=kernel, mode="constant")
-            sigma_n_squared_matrices.append((level, band, snq))
-
-    return sigma_n_squared_matrices
+            abs_sq = np.abs(highpasses[:, :, band]) ** 2
+            per_band.append(uniform_filter(abs_sq, size=kernel, mode="constant"))
+        out.append(per_band)
+    return out
 
 
-# ── Inter-scale Wiener shrinkage (vectorized) ──────────────────
+# ── Shrinkage ──────────────────────────────────────────────────
 
 
-def compute_phi_prime(mandrill_t, sigma_g_squared, sigma_n_squared_matrices):
-    """Vectorized inter-scale Wiener shrinkage.
+def shrink_factor(
+    phi_sq_sum: NDArray,
+    sigma_n_sq: NDArray,
+    sigma: float,
+    params: WaveletParams,
+) -> NDArray:
+    """Per-coefficient shrinkage factor in ``[0, 1]``.
 
-    Replaces the nested Python loop with array operations.
-    For each level and band:
-    1. Compute |phi_l|^2 (current level magnitude squared)
-    2. Upsample |phi_{l+1}|^2 from the coarser level (nearest-neighbor 2x)
-    3. phi_squared_sum = |phi_l|^2 + |phi_{l+1}_upsampled|^2
-    4. factor = max(0, 1 - local_term / sqrt(phi_squared_sum + local_term))
-    5. phi_prime = factor * phi_l
+    ``phi_sq_sum`` is ``|Φ|² + |Φparent|²`` (bivariate magnitude squared),
+    ``sigma_n_sq`` the local energy, ``sigma`` the global noise std.
+
+    * threshold ``T = √3 · σ^p`` (``p = params.sigma_exponent``)
+    * ``local_variance="divide"``: ``T ← T / √(σn² − σ²)₊`` (infinite,
+      i.e. fully shrunk, where no local signal remains)
+    * ``local_variance="gate"``: ``T`` stays global; pixels with zero local
+      energy are zeroed
+    * ``factor = (1 − T / √(phi_sq_sum [+ T if regularize]))₊``
     """
-    updated_coefficients = []
-    max_level = len(mandrill_t.highpasses) - 1
-    local_term = np.sqrt(3) * np.sqrt(sigma_g_squared)
+    threshold = np.sqrt(3.0) * float(sigma) ** params.sigma_exponent
+    if params.local_variance == "divide":
+        local_sig = np.sqrt(np.maximum(sigma_n_sq - float(sigma) ** 2, 0.0))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t_eff = np.where(local_sig > 0, threshold / local_sig, np.inf)
+        valid = (phi_sq_sum > 0) & np.isfinite(t_eff)
+    else:
+        t_eff = np.full(phi_sq_sum.shape, threshold, dtype=np.float64)
+        valid = (sigma_n_sq > 0) & (phi_sq_sum > 0)
 
-    for level in range(max_level):
-        highpasses_l = mandrill_t.highpasses[level]
-        highpasses_l_plus_1 = mandrill_t.highpasses[level + 1]
+    radicand = phi_sq_sum + t_eff if params.regularize else phi_sq_sum
+    with np.errstate(divide="ignore", invalid="ignore"):
+        denominator = np.sqrt(radicand)
+        factor = np.where(valid, 1.0 - t_eff / denominator, 0.0)
+    return np.maximum(factor, 0.0)
+
+
+def _upsample_parent_sq(parent_band: NDArray, shape: tuple[int, int]) -> NDArray:
+    """|Φparent|² brought to the child's grid: parent ``(x/2, y/2)`` for
+    each child ``(x, y)`` (nearest-neighbour 2x, clamped at the edge)."""
+    h, w = shape
+    parent_sq = np.abs(parent_band) ** 2
+    y_idx = np.minimum(np.arange(h) // 2, parent_sq.shape[0] - 1)
+    x_idx = np.minimum(np.arange(w) // 2, parent_sq.shape[1] - 1)
+    return parent_sq[np.ix_(y_idx, x_idx)]
+
+
+def compute_phi_prime(
+    transformed_data,
+    sigma: float,
+    sigma_n_squared: list[list[NDArray]],
+    params: WaveletParams | None = None,
+) -> list[list[NDArray]]:
+    """Shrunk coefficients ``result[level][band]`` for every level that is
+    filtered (all but the coarsest unless ``params.shrink_coarsest``).
+
+    Each coefficient is scaled by :func:`shrink_factor` of its own
+    magnitude squared plus its parent's (the coarser level at ``x/2, y/2``).
+    Levels are computed from the *unshrunk* pyramid, so the order of the
+    later in-place update does not matter.
+    """
+    params = params or WaveletParams.leelab()
+    n_levels = len(transformed_data.highpasses)
+    last = n_levels if params.shrink_coarsest else n_levels - 1
+
+    updated: list[list[NDArray]] = []
+    for level in range(last):
+        highpasses_l = transformed_data.highpasses[level]
+        parent = (
+            transformed_data.highpasses[level + 1]
+            if level + 1 < n_levels else None
+        )
         level_coefficients = []
-
         for band in range(highpasses_l.shape[2]):
-            phi_l_b = highpasses_l[:, :, band]
-            phi_l_plus_1_b = highpasses_l_plus_1[:, :, band]
-
-            _, _, sigma_n_squared = sigma_n_squared_matrices[level * 6 + band]
-
-            # |phi_l|^2
-            phi_l_sq = np.abs(phi_l_b) ** 2
-
-            # Upsample |phi_{l+1}|^2 to match phi_l dimensions
-            # nearest-neighbor 2x upsampling (each pixel maps to 2x2 block)
-            h_l, w_l = phi_l_b.shape
-            h_next, w_next = phi_l_plus_1_b.shape
-            phi_next_sq = np.abs(phi_l_plus_1_b) ** 2
-
-            # Create upsampled version via index mapping
-            y_idx = np.minimum(np.arange(h_l) // 2, h_next - 1)
-            x_idx = np.minimum(np.arange(w_l) // 2, w_next - 1)
-            phi_next_upsampled = phi_next_sq[np.ix_(y_idx, x_idx)]
-
-            # phi_squared_sum = |phi_l|^2 + |phi_{l+1}|^2 (upsampled)
-            phi_squared_sum = phi_l_sq + phi_next_upsampled
-
-            # Handle sigma_n_squared size mismatch
-            if sigma_n_squared.shape != phi_l_b.shape:
-                ds = max(1, phi_l_b.shape[0] // sigma_n_squared.shape[0])
-                y_ds = np.minimum(
-                    np.arange(h_l) // ds, sigma_n_squared.shape[0] - 1
+            phi = highpasses_l[:, :, band]
+            phi_sq_sum = np.abs(phi) ** 2
+            if parent is not None:
+                phi_sq_sum = phi_sq_sum + _upsample_parent_sq(
+                    parent[:, :, band], phi.shape
                 )
-                x_ds = np.minimum(
-                    np.arange(w_l) // ds, sigma_n_squared.shape[1] - 1
-                )
-                sigma_n_sq = sigma_n_squared[np.ix_(y_ds, x_ds)]
-            else:
-                sigma_n_sq = sigma_n_squared
-
-            # Compute shrinkage factor (vectorized)
-            denominator = np.sqrt(phi_squared_sum + local_term)
-            factor = np.where(
-                (sigma_n_sq > 0) & (phi_squared_sum > 0),
-                1.0 - local_term / denominator,
-                0.0,
+            factor = shrink_factor(
+                phi_sq_sum, sigma_n_squared[level][band], sigma, params
             )
-            factor = np.maximum(factor, 0.0)
-
-            phi_prime = factor * phi_l_b
-            level_coefficients.append(phi_prime)
-
-        updated_coefficients.append(level_coefficients)
-
-    return updated_coefficients
+            level_coefficients.append(factor * phi)
+        updated.append(level_coefficients)
+    return updated
 
 
-def update_coefficients(mandrill_t, phi_prime_matrices):
-    """Update wavelet coefficients with filtered values."""
+def update_coefficients(transformed_data, phi_prime_matrices) -> None:
+    """Write shrunk coefficients back into the pyramid in place."""
     for level, level_matrices in enumerate(phi_prime_matrices):
         for band, phi_prime in enumerate(level_matrices):
-            if band < mandrill_t.highpasses[level].shape[2]:
-                mandrill_t.highpasses[level][:, :, band] = phi_prime
+            transformed_data.highpasses[level][:, :, band] = phi_prime
 
 
 # ── Main filter function ──────────────────────────────────────
@@ -203,18 +495,20 @@ def _next_pow2(n: int) -> int:
     return p
 
 
-def _filter_channel(data: NDArray, n_levels: int) -> NDArray:
+def _filter_channel(
+    data: NDArray, n_levels: int, params: WaveletParams | None = None
+) -> NDArray:
     """Apply DTCWT denoising to a single 2D channel.
 
-    Mirrors ``ComplexWaveletFilter.process_files``' per-channel filtering
-    with vectorized numpy operations:
-    Anscombe → DTCWT (``biort='Legall'``) → inter-scale Wiener shrinkage →
-    inverse DTCWT → inverse Anscombe. The basis matters: with the
-    reference Anscombe transforms in place, ``near_sym_a`` leaves a ~1e-3
-    residual versus the reference output while ``Legall`` matches it to
-    float precision.
+    Anscombe → DTCWT (``params.biort`` / ``qshift_a``) → BiShrink-style
+    shrinkage → inverse DTCWT → inverse Anscombe. With the LeeLab preset
+    this mirrors ``ComplexWaveletFilter.process_files``' per-channel
+    filtering to float precision; the basis matters for that identity
+    (``near_sym_a`` leaves a ~1e-3 residual, ``Legall`` matches).
     """
     import dtcwt
+
+    params = params or WaveletParams.leelab()
 
     # Pad to power-of-2 dimensions for DTCWT
     h, w = data.shape
@@ -222,29 +516,22 @@ def _filter_channel(data: NDArray, n_levels: int) -> NDArray:
     pad_w = _next_pow2(w) - w
     padded = np.pad(data, ((0, pad_h), (0, pad_w)), mode="reflect")
 
-    # Anscombe transform
-    transformed = anscombe_transform(padded)
+    transformed = anscombe_transform(padded, clamp=params.anscombe_clamp)
 
-    # Forward DTCWT — Legall/qshift_a to match ComplexWaveletFilter.py
-    xfm = dtcwt.Transform2d(biort="Legall", qshift="qshift_a")
+    xfm = dtcwt.Transform2d(biort=params.biort, qshift="qshift_a")
     coeffs = xfm.forward(transformed, nlevels=n_levels)
 
-    # Noise estimation
-    median_vals = calculate_median_values(coeffs)
-    sigma_g_squared = median_vals / 0.6745
-
-    # Local noise variance (vectorized with uniform_filter)
-    sigma_n_squared = calculate_local_noise_variance(coeffs, n_levels)
-
-    # Inter-scale Wiener shrinkage (vectorized)
-    phi_prime = compute_phi_prime(coeffs, sigma_g_squared, sigma_n_squared)
+    sigma = estimate_noise_sigma(coeffs, noise_bands=params.noise_bands)
+    sigma_n_squared = calculate_local_noise_variance(
+        coeffs, n_levels, window_radius=params.window_radius
+    )
+    phi_prime = compute_phi_prime(coeffs, sigma, sigma_n_squared, params)
     update_coefficients(coeffs, phi_prime)
 
-    # Inverse DTCWT
     reconstructed = xfm.inverse(coeffs)
-
-    # Inverse Anscombe
-    result = reverse_anscombe_transform(reconstructed)
+    result = reverse_anscombe_transform(
+        reconstructed, method=params.inverse_anscombe
+    )
 
     # Remove padding
     return result[:h, :w]
@@ -256,12 +543,14 @@ def denoise_phasor(
     intensity: NDArray,
     filter_level: int = 9,
     omega: float | None = None,
-) -> dict[str, NDArray]:
+    params: WaveletParams | None = None,
+) -> dict[str, Any]:
     """Apply DTCWT-based wavelet filtering to FLIM phasor data.
 
-    Uses the reference ComplexWaveletFilter's inter-scale Wiener
-    shrinkage algorithm and phasor recovery, vectorized with numpy for
-    fast execution on large stitched datasets.
+    Filters the Fourier images ``G·I``, ``S·I`` and ``I`` separately, then
+    recovers ``G = Gfiltered·I / Ifiltered`` (paper eqs. 3-8) with the
+    reference's recovery (``nan_to_num``, threshold by the *unfiltered*
+    intensity, clip to ``[-0.1, 1.1]``).
 
     Parameters
     ----------
@@ -270,6 +559,7 @@ def denoise_phasor(
     intensity : (H, W) total photon counts per pixel
     filter_level : DTCWT decomposition depth (default 9)
     omega : angular frequency in rad/ns (for lifetime calculation, optional)
+    params : which algorithm variant to run; ``None`` = LeeLab reference
 
     Returns
     -------
@@ -281,7 +571,10 @@ def denoise_phasor(
         'SU' : unfiltered S map (copy of input)
         'TU' : unfiltered lifetime map (if omega provided, else None)
         'filter_level' : decomposition level used
+        'params' : the :class:`WaveletParams` used, as a dict
     """
+    params = params or WaveletParams.leelab()
+
     g = g.astype(np.float64)
     s = s.astype(np.float64)
     intensity = intensity.astype(np.float64)
@@ -295,12 +588,12 @@ def denoise_phasor(
     f_imag = s * intensity
 
     # Step 2-5: Filter each channel
-    print("  Filtering Freal...")
-    f_real_filtered = _filter_channel(f_real, filter_level)
-    print("  Filtering Fimag...")
-    f_imag_filtered = _filter_channel(f_imag, filter_level)
-    print("  Filtering intensity...")
-    intensity_filtered = _filter_channel(intensity, filter_level)
+    logger.debug("Wavelet (%s, level %d): filtering Freal", params.method, filter_level)
+    f_real_filtered = _filter_channel(f_real, filter_level, params)
+    logger.debug("Wavelet (%s, level %d): filtering Fimag", params.method, filter_level)
+    f_imag_filtered = _filter_channel(f_imag, filter_level, params)
+    logger.debug("Wavelet (%s, level %d): filtering intensity", params.method, filter_level)
+    intensity_filtered = _filter_channel(intensity, filter_level, params)
 
     # Step 6: Recover filtered phasor — faithful to
     # ComplexWaveletFilter.process_files. Raw-divide by the *filtered*
@@ -343,4 +636,5 @@ def denoise_phasor(
         "SU": s_unfiltered.astype(np.float32),
         "TU": t_unfiltered.astype(np.float32) if t_unfiltered is not None else None,
         "filter_level": filter_level,
+        "params": params.to_dict(),
     }

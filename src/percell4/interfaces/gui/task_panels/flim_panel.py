@@ -29,7 +29,7 @@ from percell4.domain.flim.phasor import (
     cal_phase_key,
     resolve_calibration,
 )
-from percell4.domain.flim.wavelet_filter import MAX_FILTER_LEVEL
+from percell4.domain.flim.wavelet_filter import MAX_FILTER_LEVEL, WaveletParams
 from percell4.gui import theme
 from percell4.model import CellDataModel
 
@@ -180,6 +180,41 @@ class FlimPanel(QWidget):
         self._wavelet_level.setValue(9)
         level_row.addWidget(self._wavelet_level)
         wavelet_layout.addLayout(level_row)
+
+        # Algorithm variant: the LeeLab reference script, a strict reading
+        # of Wang et al. 2021 (BiShrink), or a custom mix of their levers.
+        method_row = QHBoxLayout()
+        method_row.addWidget(QLabel("Method:"))
+        self._wavelet_method = QComboBox()
+        self._wavelet_method.addItem("LeeLab reference", "leelab")
+        self._wavelet_method.addItem("Paper (Wang 2021 BiShrink)", "paper")
+        self._wavelet_method.addItem("Custom", "custom")
+        self._wavelet_method.setToolTip(
+            "LeeLab: matches the reference ComplexWaveletFilter.py exactly.\n"
+            "Paper: Sendur & Selesnick BiShrink as described in Wang et al.,\n"
+            "Biomed. Opt. Express 12(6) 3463 (2021) and its supplement.\n"
+            "Custom: any lever below moved off a preset."
+        )
+        method_row.addWidget(self._wavelet_method)
+        wavelet_layout.addLayout(method_row)
+
+        self._wavelet_show_levers = QCheckBox("Show algorithm levers")
+        self._wavelet_show_levers.setToolTip(
+            "Expose each point where the LeeLab script and the paper differ, "
+            "so they can be flipped one at a time."
+        )
+        wavelet_layout.addWidget(self._wavelet_show_levers)
+
+        self._wavelet_levers = self._build_wavelet_levers()
+        self._wavelet_levers.setVisible(False)
+        wavelet_layout.addWidget(self._wavelet_levers)
+
+        self._wavelet_show_levers.toggled.connect(self._wavelet_levers.setVisible)
+        self._wavelet_method.currentIndexChanged.connect(
+            self._on_wavelet_method_changed
+        )
+        self._syncing_wavelet_levers = False
+        self._on_wavelet_method_changed()
 
         btn_wavelet = QPushButton("Apply Wavelet Filter")
         btn_wavelet.setToolTip(
@@ -625,6 +660,173 @@ class FlimPanel(QWidget):
 
     # ── Wavelet Filter ───────────────────────────────────────
 
+    def _build_wavelet_levers(self) -> QWidget:
+        """Widgets for every :class:`WaveletParams` lever.
+
+        Each widget maps 1:1 onto a field; :meth:`_wavelet_params` reads
+        them and :meth:`_set_wavelet_levers` writes a preset into them.
+        """
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(12, 0, 0, 0)
+
+        def combo(label, items, tip):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            w = QComboBox()
+            for text, value in items:
+                w.addItem(text, value)
+            w.setToolTip(tip)
+            row.addWidget(w)
+            lay.addLayout(row)
+            return w
+
+        self._wl_noise_bands = combo(
+            "Noise bands:",
+            [("All levels & bands", "all"), ("Finest-level ±45°", "finest_diagonal")],
+            "Which coefficients feed the global MAD noise estimate.\n"
+            "LeeLab: mean of per-band medians over every level.\n"
+            "Paper: one median over the finest-level ±45° bands (suppl. eq. 1).",
+        )
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("σ exponent:"))
+        self._wl_sigma_exponent = QDoubleSpinBox()
+        self._wl_sigma_exponent.setRange(0.0, 4.0)
+        self._wl_sigma_exponent.setSingleStep(0.5)
+        self._wl_sigma_exponent.setDecimals(2)
+        self._wl_sigma_exponent.setToolTip(
+            "Power of σ in the threshold √3·σ^p.\n"
+            "LeeLab: 0.5 (square root of σ). Paper: 2 (the variance)."
+        )
+        row.addWidget(self._wl_sigma_exponent)
+        lay.addLayout(row)
+
+        self._wl_local_variance = combo(
+            "Local variance:",
+            [("Gate only", "gate"), ("Divide threshold (BiShrink)", "divide")],
+            "Divide: threshold ÷ local signal std √(σn²−σ²)₊, the paper's eq. 3.\n"
+            "Gate: the local energy only decides which pixels are shrunk;\n"
+            "the threshold stays global (LeeLab).",
+        )
+
+        self._wl_regularize = QCheckBox("Regularize denominator (+T under the root)")
+        self._wl_regularize.setToolTip(
+            "LeeLab adds the threshold under the root of the bivariate\n"
+            "magnitude; the paper uses the plain √(|Φ|²+|Φparent|²)."
+        )
+        lay.addWidget(self._wl_regularize)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Window radius:"))
+        self._wl_window_radius = QSpinBox()
+        self._wl_window_radius.setRange(0, 15)
+        self._wl_window_radius.setSpecialValueText("Auto (LeeLab)")
+        self._wl_window_radius.setToolTip(
+            "Radius of the square window for the local energy.\n"
+            "Auto: radius = filter level (3 above 10 levels), the LeeLab rule.\n"
+            "Paper preset: 3 (a 7×7 window). Only matters with Divide."
+        )
+        row.addWidget(self._wl_window_radius)
+        lay.addLayout(row)
+
+        self._wl_biort = combo(
+            "First-level basis:",
+            [("LeGall 5,3", "Legall"), ("near_sym_a", "near_sym_a"), ("near_sym_b", "near_sym_b")],
+            "Biorthogonal basis for the first DTCWT level. Both presets use\n"
+            "LeGall 5,3 (paper table S1); the others are for comparison.",
+        )
+        self._wl_anscombe_clamp = combo(
+            "Anscombe clamp:",
+            [("Clamp before +3/8", "before"), ("Clamp after +3/8", "after")],
+            "Before: 2√(max(x,0)+3/8) (LeeLab). After: 2√(max(x+3/8,0)),\n"
+            "the paper's eq. 6. They differ wherever G·I or S·I is negative.",
+        )
+        self._wl_inverse_anscombe = combo(
+            "Inverse Anscombe:",
+            [("Exact unbiased", "exact"), ("Algebraic (y/2)²−3/8", "algebraic")],
+            "Exact: sixth-order unbiased rational inverse (LeeLab).\n"
+            "Algebraic: the literal inverse of the forward transform.",
+        )
+
+        self._wl_shrink_coarsest = QCheckBox("Shrink coarsest level too")
+        self._wl_shrink_coarsest.setToolTip(
+            "Also shrink the coarsest highpass level (no parent, so only its\n"
+            "own magnitude enters). Both presets leave it untouched."
+        )
+        lay.addWidget(self._wl_shrink_coarsest)
+
+        for w in (
+            self._wl_noise_bands, self._wl_local_variance, self._wl_biort,
+            self._wl_anscombe_clamp, self._wl_inverse_anscombe,
+        ):
+            w.currentIndexChanged.connect(self._on_wavelet_lever_changed)
+        self._wl_sigma_exponent.valueChanged.connect(self._on_wavelet_lever_changed)
+        self._wl_window_radius.valueChanged.connect(self._on_wavelet_lever_changed)
+        self._wl_regularize.toggled.connect(self._on_wavelet_lever_changed)
+        self._wl_shrink_coarsest.toggled.connect(self._on_wavelet_lever_changed)
+        return box
+
+    @staticmethod
+    def _select_data(combo: QComboBox, value: Any) -> None:
+        idx = combo.findData(value)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
+    def _set_wavelet_levers(self, params: WaveletParams) -> None:
+        """Write ``params`` into the lever widgets without relabelling."""
+        self._syncing_wavelet_levers = True
+        try:
+            self._select_data(self._wl_noise_bands, params.noise_bands)
+            self._wl_sigma_exponent.setValue(params.sigma_exponent)
+            self._select_data(self._wl_local_variance, params.local_variance)
+            self._wl_regularize.setChecked(params.regularize)
+            self._wl_window_radius.setValue(params.window_radius)
+            self._select_data(self._wl_biort, params.biort)
+            self._select_data(self._wl_anscombe_clamp, params.anscombe_clamp)
+            self._select_data(self._wl_inverse_anscombe, params.inverse_anscombe)
+            self._wl_shrink_coarsest.setChecked(params.shrink_coarsest)
+        finally:
+            self._syncing_wavelet_levers = False
+
+    def _wavelet_params(self) -> WaveletParams:
+        """The :class:`WaveletParams` currently described by the widgets.
+
+        The label (leelab / paper / custom) is derived from the lever
+        values, so a Custom selection that happens to equal a preset is
+        reported as that preset.
+        """
+        return WaveletParams.from_dict({
+            "noise_bands": self._wl_noise_bands.currentData(),
+            "sigma_exponent": self._wl_sigma_exponent.value(),
+            "local_variance": self._wl_local_variance.currentData(),
+            "regularize": self._wl_regularize.isChecked(),
+            "window_radius": self._wl_window_radius.value(),
+            "biort": self._wl_biort.currentData(),
+            "anscombe_clamp": self._wl_anscombe_clamp.currentData(),
+            "inverse_anscombe": self._wl_inverse_anscombe.currentData(),
+            "shrink_coarsest": self._wl_shrink_coarsest.isChecked(),
+        })
+
+    def _on_wavelet_method_changed(self) -> None:
+        """Preset picked → load its levers. Custom → leave them as they are."""
+        if getattr(self, "_syncing_wavelet_levers", False):
+            return
+        method = self._wavelet_method.currentData()
+        if method in ("leelab", "paper"):
+            self._set_wavelet_levers(WaveletParams.preset(method))
+
+    def _on_wavelet_lever_changed(self, *_args) -> None:
+        """A lever moved → relabel the method combo (preset or Custom)."""
+        if self._syncing_wavelet_levers:
+            return
+        method = self._wavelet_params().method
+        self._syncing_wavelet_levers = True
+        try:
+            self._select_data(self._wavelet_method, method)
+        finally:
+            self._syncing_wavelet_levers = False
+
     def _on_apply_wavelet(self) -> None:
         active_channel = self._get_active_channel()
         if active_channel is None:
@@ -632,14 +834,17 @@ class FlimPanel(QWidget):
             return
 
         filter_level = self._wavelet_level.value()
+        params = self._wavelet_params()
 
         # Cache-check unless Shift forces recompute. We check g_filtered
         # specifically — wavelet's cache is distinct from the raw phasor
         # cache. The cached wavelet is reused ONLY when it was computed at
-        # the requested filter level; a different level (or an unknown /
-        # absent cached level) falls through and recomputes, overwriting the
-        # stale result. Without this gate, changing the Filter Level spinbox
-        # would silently no-op against the cache.
+        # the requested filter level AND with the same algorithm variant; a
+        # different level / variant (or an unknown / absent cached level)
+        # falls through and recomputes, overwriting the stale result.
+        # Without this gate, changing the Filter Level spinbox or the
+        # Method would silently no-op against the cache. A cache with no
+        # wavelet_params attr predates the variants and was LeeLab.
         if not self._shift_held():
             try:
                 from percell4.application.use_cases.load_cached_phasor import (
@@ -667,6 +872,9 @@ class FlimPanel(QWidget):
                     cached.g_filtered is not None
                     and cached.s_filtered is not None
                     and cached.cached_filter_level == filter_level
+                    and self._cached_params_match(
+                        cached.cached_wavelet_params, params
+                    )
                 ):
                     seg_labels = self._get_active_seg_labels()
                     phasor_win = self._get_phasor_window()
@@ -678,8 +886,8 @@ class FlimPanel(QWidget):
                             labels=seg_labels,
                         )
                     self._show_status(
-                        f"Loaded cached wavelet (level {filter_level}, "
-                        f"channel: {active_channel})"
+                        f"Loaded cached wavelet ({params.label()}, level "
+                        f"{filter_level}, channel: {active_channel})"
                     )
                     return
                 # No filtered cache, or it was computed at a different level
@@ -687,7 +895,10 @@ class FlimPanel(QWidget):
 
         recompute_prefix = (
             "Recomputing wavelet (Shift)" if self._shift_held()
-            else f"Applying wavelet filter (level {filter_level}) to {active_channel}"
+            else (
+                f"Applying {params.label()} wavelet filter (level "
+                f"{filter_level}) to {active_channel}"
+            )
         )
         self._show_status(f"{recompute_prefix}...")
 
@@ -704,6 +915,7 @@ class FlimPanel(QWidget):
                 channel=active_channel,
                 filter_level=filter_level,
                 view_bin=active_bin,
+                params=params,
             )
         except ImportError:
             QApplication.restoreOverrideCursor()
@@ -770,11 +982,29 @@ class FlimPanel(QWidget):
         verb = "Recomputed wavelet:" if self._shift_held() else "Wavelet filter applied:"
         suffix = " (Shift)" if self._shift_held() else ""
         self._show_status(
-            f"{verb} level {filter_level} | "
+            f"{verb} {params.label()}, level {filter_level} | "
             f"{result.n_valid:,} valid pixels | channel: {active_channel}{suffix}"
         )
         # A wavelet result now exists → enable the Wavelet lifetime source.
         self._refresh_lifetime_source_enabled()
+
+    @staticmethod
+    def _cached_params_match(
+        cached: dict | None, requested: WaveletParams
+    ) -> bool:
+        """Does a cached ``wavelet_params`` attr describe ``requested``?
+
+        ``None`` (a file written before variants existed) means LeeLab.
+        An unparseable attr never matches, so the cache is recomputed.
+        """
+        try:
+            cached_params = (
+                WaveletParams.from_dict(cached) if cached
+                else WaveletParams.leelab()
+            )
+        except (ValueError, TypeError):
+            return False
+        return cached_params.same_computation(requested)
 
     # ── Lifetime ─────────────────────────────────────────────
 

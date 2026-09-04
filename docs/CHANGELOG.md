@@ -11,6 +11,23 @@ the current list.
 
 ### Added
 
+- **Paper-strict wavelet filter, with levers.** The FLIM tab's Wavelet
+  Filter group gains a Method picker: *LeeLab reference* (the historical
+  behaviour, unchanged to the bit) or *Paper (Wang 2021 BiShrink)*, a strict
+  reading of Wang et al., Biomed. Opt. Express 12(6) 3463 and its supplement
+  (`docs/reference/`). A *Show algorithm levers* toggle exposes every point
+  where the two differ — which bands feed the MAD noise estimate, the power
+  of σ in the threshold, whether the local variance divides the threshold or
+  only gates it, the regulariser under the root, the window radius, the
+  first-level basis, the Anscombe clamp order, the inverse-Anscombe flavour,
+  and whether the coarsest level is shrunk — so each can be flipped on its
+  own to see which piece moves a dataset (moving any lever relabels the
+  method *Custom*). The variant is stamped on `g_filtered` as
+  `wavelet_method` / `wavelet_params`, and Apply Wavelet recomputes when the
+  cached variant differs from the requested one. `percell4-batch-phasor`
+  takes the same choices via `--wavelet-method` and repeatable
+  `--wavelet-param KEY=VALUE`.
+
 - **FLIM calibration from a `.xml` metadata export.** The Batch TCSPC
   dialog's calibration step now also accepts the `.xml` file written by the
   standalone `extract_lif_metadata` tool (the Windows exe that runs on the
