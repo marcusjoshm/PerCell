@@ -90,7 +90,7 @@ def _stub_use_cases(
             raise compute_raises[channel]
         return None
 
-    def fake_wavelet(self, channel, filter_level=9, view_bin=1):  # noqa: ARG001
+    def fake_wavelet(self, channel, filter_level=9, view_bin=1, params=None):  # noqa: ARG001
         calls["wavelet"].append(
             (channel, {"filter_level": filter_level, "view_bin": view_bin})
         )

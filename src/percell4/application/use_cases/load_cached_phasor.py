@@ -19,6 +19,7 @@ than surfacing a stack trace.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 
@@ -48,9 +49,14 @@ class CachedPhasorResult:
     same way so the Compute-Phasor handler can recompute when the user
     picks a different harmonic instead of serving a stale cache computed
     at another harmonic. It is ``None`` when the attr is absent (pre-attr
-    files) or the repo lacks ``read_array_attrs`` (test fakes). Remaining
-    writer attrs (flim_frequency_mhz) stay unsurfaced — no consumer needs
-    them.
+    files) or the repo lacks ``read_array_attrs`` (test fakes).
+    ``cached_wavelet_params`` is the algorithm-variant dict ApplyWavelet
+    stamped as the ``wavelet_params`` JSON attr (see
+    :class:`~percell4.domain.flim.wavelet_filter.WaveletParams`); ``None``
+    when absent — files written before the variant existed were always
+    the LeeLab reference, which the Apply-Wavelet handler assumes for a
+    ``None``. Remaining writer attrs (flim_frequency_mhz) stay unsurfaced
+    — no consumer needs them.
     """
 
     g_map: NDArray[np.float32]
@@ -61,6 +67,7 @@ class CachedPhasorResult:
     channel: str
     cached_filter_level: int | None = None
     cached_harmonic: int | None = None
+    cached_wavelet_params: dict | None = None
 
 
 class LoadCachedPhasor:
@@ -159,6 +166,7 @@ class LoadCachedPhasor:
         # read_array_attrs (test fakes) or a pre-attr file leaves this None,
         # which the caller treats as "level unknown → recompute".
         cached_filter_level: int | None = None
+        cached_wavelet_params: dict | None = None
         if g_filtered is not None and s_filtered is not None:
             attr_reader = getattr(self._repo, "read_array_attrs", None)
             if attr_reader is not None:
@@ -167,6 +175,14 @@ class LoadCachedPhasor:
                     level = attrs.get("filter_level")
                     if level is not None:
                         cached_filter_level = int(level)
+                    raw_params = attrs.get("wavelet_params")
+                    if raw_params is not None:
+                        if isinstance(raw_params, bytes):
+                            raw_params = raw_params.decode("utf-8")
+                        cached_wavelet_params = (
+                            json.loads(raw_params)
+                            if isinstance(raw_params, str) else dict(raw_params)
+                        )
                 except Exception:
                     logger.debug(
                         "Failed to read cached wavelet filter_level for %s",
@@ -235,4 +251,5 @@ class LoadCachedPhasor:
             channel=channel,
             cached_filter_level=cached_filter_level,
             cached_harmonic=cached_harmonic,
+            cached_wavelet_params=cached_wavelet_params,
         )

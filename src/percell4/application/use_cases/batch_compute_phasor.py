@@ -44,7 +44,7 @@ from percell4.adapters.hdf5_store import Hdf5DatasetRepository
 from percell4.application.session import Session
 from percell4.application.use_cases.apply_wavelet import ApplyWavelet
 from percell4.application.use_cases.compute_phasor import ComputePhasor
-from percell4.domain.flim.wavelet_filter import MAX_FILTER_LEVEL
+from percell4.domain.flim.wavelet_filter import MAX_FILTER_LEVEL, WaveletParams
 from percell4.store import DatasetStore
 
 logger = logging.getLogger(__name__)
@@ -151,6 +151,7 @@ def batch_compute_phasor(
     filter_level: int = 9,
     overwrite: bool = False,
     progress_callback: Callable[[BatchPhasorItemResult], None] | None = None,
+    wavelet_params: WaveletParams | None = None,
 ) -> BatchPhasorReport:
     """Compute phasor + apply wavelet across ``h5_paths``.
 
@@ -167,6 +168,8 @@ def batch_compute_phasor(
             missing these are reported as skipped, not as failures.
         filter_level: Wavelet filter level (1..MAX_FILTER_LEVEL). Same
             value applied to every channel of every dataset.
+        wavelet_params: Algorithm variant (LeeLab reference, strict paper
+            BiShrink, or custom levers). ``None`` = LeeLab reference.
         overwrite: If False (default), channels with an existing
             ``/phasor/<ch>/g`` are skipped. If True, recompute and
             overwrite. ``ComputePhasor`` itself already invalidates
@@ -186,6 +189,7 @@ def batch_compute_phasor(
 
     repo = Hdf5DatasetRepository()
     results: list[BatchPhasorItemResult] = []
+    wavelet_params = wavelet_params or WaveletParams.leelab()
 
     for h5_path in h5_paths:
         result = _process_one_dataset(
@@ -193,6 +197,7 @@ def batch_compute_phasor(
             repo=repo,
             filter_level=filter_level,
             overwrite=overwrite,
+            wavelet_params=wavelet_params,
         )
         results.append(result)
         if progress_callback is not None:
@@ -207,6 +212,7 @@ def _process_one_dataset(
     repo: Hdf5DatasetRepository,
     filter_level: int,
     overwrite: bool,
+    wavelet_params: WaveletParams | None = None,
 ) -> BatchPhasorItemResult:
     """Run phasor + wavelet for every channel of one dataset.
 
@@ -274,6 +280,7 @@ def _process_one_dataset(
         try:
             wavelet_uc.execute(
                 channel=channel, filter_level=filter_level, view_bin=1,
+                params=wavelet_params or WaveletParams.leelab(),
             )
         except Exception as exc:  # noqa: BLE001 — per-channel isolation
             # /phasor/<ch>/g + s landed but g_filtered didn't. Record

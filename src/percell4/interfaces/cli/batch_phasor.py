@@ -47,7 +47,7 @@ from percell4.application.use_cases.batch_compute_phasor import (
     batch_compute_phasor,
     batch_remove_phasor,
 )
-from percell4.domain.flim.wavelet_filter import MAX_FILTER_LEVEL
+from percell4.domain.flim.wavelet_filter import MAX_FILTER_LEVEL, WaveletParams
 from percell4.io.paths import is_sidecar, scan_files
 
 logger = logging.getLogger(__name__)
@@ -108,6 +108,32 @@ def _print_item_status(
         print(f"    {channel} error: {msg}")
 
 
+def _build_wavelet_params(method: str, overrides: list[str]) -> WaveletParams:
+    """Preset + ``KEY=VALUE`` overrides -> :class:`WaveletParams`.
+
+    Raises ``ValueError`` (surfaced as a parser error) for a malformed
+    pair, an unknown key, or a value outside the lever's choices.
+    """
+    params = WaveletParams.preset(method)
+    if not overrides:
+        return params
+    raw: dict[str, str] = {}
+    for item in overrides:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            raise ValueError(
+                f"--wavelet-param expects KEY=VALUE, got {item!r}"
+            )
+        raw[key.strip()] = value.strip()
+    if "method" in raw:
+        raise ValueError(
+            "--wavelet-param cannot set 'method'; use --wavelet-method"
+        )
+    # Validate + coerce through from_dict, then apply on top of the preset.
+    coerced = WaveletParams.from_dict(raw).to_dict()
+    return params.with_overrides(**{k: coerced[k] for k in raw})
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
@@ -129,6 +155,9 @@ def main(argv: list[str] | None = None) -> int:
             "  percell4-batch-phasor dish_1.h5 dish_2.h5\n"
             "  percell4-batch-phasor /scratch/dishes/ --filter-level 5\n"
             "  percell4-batch-phasor *.h5 --overwrite --quiet\n"
+            "  percell4-batch-phasor *.h5 --wavelet-method paper\n"
+            "  percell4-batch-phasor *.h5 --wavelet-method paper "
+            "--wavelet-param regularize=true\n"
             "  percell4-batch-phasor /scratch/dishes/ --remove\n"
         ),
     )
@@ -145,6 +174,29 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=9,
         help=f"Wavelet filter level (1..{MAX_FILTER_LEVEL}, default 9).",
+    )
+    parser.add_argument(
+        "--wavelet-method",
+        choices=("leelab", "paper"),
+        default="leelab",
+        help=(
+            "Wavelet algorithm preset. 'leelab' (default) matches the "
+            "reference ComplexWaveletFilter.py; 'paper' is the strict "
+            "Wang et al. 2021 BiShrink (MAD from the finest-level ±45° "
+            "bands, sigma^2 threshold divided by the local signal std, "
+            "7x7 window, no regulariser, algebraic inverse Anscombe)."
+        ),
+    )
+    parser.add_argument(
+        "--wavelet-param",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Override one lever of the chosen preset (repeatable). Keys: "
+            + ", ".join(k for k in WaveletParams.leelab().levers())
+            + ". Example: --wavelet-param local_variance=divide"
+        ),
     )
     parser.add_argument(
         "--overwrite",
@@ -197,6 +249,13 @@ def main(argv: list[str] | None = None) -> int:
             f"got {args.filter_level}"
         )
 
+    try:
+        wavelet_params = _build_wavelet_params(
+            args.wavelet_method, args.wavelet_param
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
     paths = _resolve_paths(args.paths)
     if not paths:
         print(
@@ -217,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
             filter_level=args.filter_level,
             overwrite=args.overwrite,
             progress_callback=cb,
+            wavelet_params=wavelet_params,
         )
 
     print(

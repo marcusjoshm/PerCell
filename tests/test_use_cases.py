@@ -1054,7 +1054,7 @@ class TestPhasorWritesViewBin:
         from percell4.application.use_cases.apply_wavelet import ApplyWavelet
 
         # Replace denoise_phasor with a passthrough.
-        def fake_denoise(g, s, intensity, filter_level=1, omega=None):
+        def fake_denoise(g, s, intensity, filter_level=1, omega=None, params=None):
             return {"G": g.copy(), "S": s.copy(), "T": np.zeros_like(g)}
 
         monkeypatch.setattr(wf, "denoise_phasor", fake_denoise)
@@ -1306,7 +1306,7 @@ class TestApplyWaveletTimelapse:
         nt, h, w, tb = 3, 4, 4, 8
         calls = []
 
-        def fake_denoise(g, s, intensity, filter_level=1, omega=None):
+        def fake_denoise(g, s, intensity, filter_level=1, omega=None, params=None):
             # Mirror _filter_channel's `h, w = data.shape` so a 3-D pass
             # reproduces the reported crash; per-frame 2-D input is required.
             hh, ww = g.shape

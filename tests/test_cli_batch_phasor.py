@@ -57,7 +57,7 @@ def stub_use_cases(monkeypatch: pytest.MonkeyPatch):
             {"channel": channel, "harmonic": harmonic, "view_bin": view_bin}
         )
 
-    def fake_wavelet(self, channel, filter_level=9, view_bin=1):  # noqa: ARG001
+    def fake_wavelet(self, channel, filter_level=9, view_bin=1, params=None):  # noqa: ARG001
         calls["wavelet"].append(
             {
                 "channel": channel,
@@ -167,7 +167,7 @@ def test_main_partial_progress_returns_zero(
     def fake_compute(self, channel, harmonic=1, view_bin=1):  # noqa: ARG001
         return None
 
-    def fake_wavelet(self, channel, filter_level=9, view_bin=1):  # noqa: ARG001
+    def fake_wavelet(self, channel, filter_level=9, view_bin=1, params=None):  # noqa: ARG001
         if channel == "ch1":
             raise RuntimeError("synthetic wavelet failure")
 
@@ -200,7 +200,7 @@ def test_main_overwrite_flag_threads_through(
 
     real_fn = cli.batch_compute_phasor
 
-    def spy(paths, *, filter_level=9, overwrite=False, progress_callback=None):
+    def spy(paths, *, filter_level=9, overwrite=False, progress_callback=None, wavelet_params=None):
         captured["overwrite"] = overwrite
         return real_fn(
             paths, filter_level=filter_level, overwrite=overwrite,
@@ -215,7 +215,7 @@ def test_main_overwrite_flag_threads_through(
     )
     monkeypatch.setattr(
         "percell4.application.use_cases.batch_compute_phasor.ApplyWavelet.execute",
-        lambda self, channel, filter_level=9, view_bin=1: None,
+        lambda self, channel, filter_level=9, view_bin=1, params=None: None,
     )
 
     cli.main([str(h5), "--overwrite"])
@@ -438,3 +438,108 @@ def test_cli_module_imports_without_qt() -> None:
     # Confirm core dependencies loaded.
     assert hasattr(cli, "main")
     assert hasattr(cli, "batch_compute_phasor")
+
+
+# ── Wavelet method / levers ──────────────────────────────────────
+
+
+def test_wavelet_method_threads_through_to_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--wavelet-method paper reaches batch_compute_phasor as the paper preset."""
+    from percell4.domain.flim.wavelet_filter import WaveletParams
+
+    captured: dict = {}
+
+    def spy(paths, *, filter_level=9, overwrite=False, progress_callback=None,
+            wavelet_params=None):
+        captured["params"] = wavelet_params
+        from percell4.application.use_cases.batch_compute_phasor import (
+            BatchPhasorReport,
+        )
+        return BatchPhasorReport(items=())
+
+    monkeypatch.setattr(cli, "batch_compute_phasor", spy)
+    h5 = tmp_path / "a.h5"
+    h5.write_bytes(b"")
+    cli.main([str(h5), "--wavelet-method", "paper"])
+    assert captured["params"] == WaveletParams.paper()
+
+
+def test_wavelet_param_override_relabels_custom(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from percell4.domain.flim.wavelet_filter import WaveletParams
+
+    captured: dict = {}
+
+    def spy(paths, *, filter_level=9, overwrite=False, progress_callback=None,
+            wavelet_params=None):
+        captured["params"] = wavelet_params
+        from percell4.application.use_cases.batch_compute_phasor import (
+            BatchPhasorReport,
+        )
+        return BatchPhasorReport(items=())
+
+    monkeypatch.setattr(cli, "batch_compute_phasor", spy)
+    h5 = tmp_path / "a.h5"
+    h5.write_bytes(b"")
+    cli.main([
+        str(h5), "--wavelet-method", "paper",
+        "--wavelet-param", "regularize=true",
+        "--wavelet-param", "window_radius=5",
+    ])
+    p = captured["params"]
+    assert p.method == "custom"
+    assert p.regularize is True and p.window_radius == 5
+    assert p.local_variance == "divide"  # rest of the paper preset intact
+    assert p == WaveletParams.paper().with_overrides(regularize=True, window_radius=5)
+
+
+def test_default_wavelet_method_is_leelab(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from percell4.domain.flim.wavelet_filter import WaveletParams
+
+    captured: dict = {}
+
+    def spy(paths, *, filter_level=9, overwrite=False, progress_callback=None,
+            wavelet_params=None):
+        captured["params"] = wavelet_params
+        from percell4.application.use_cases.batch_compute_phasor import (
+            BatchPhasorReport,
+        )
+        return BatchPhasorReport(items=())
+
+    monkeypatch.setattr(cli, "batch_compute_phasor", spy)
+    h5 = tmp_path / "a.h5"
+    h5.write_bytes(b"")
+    cli.main([str(h5)])
+    assert captured["params"] == WaveletParams.leelab()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        ["--wavelet-param", "bogus=1"],
+        ["--wavelet-param", "noise_bands=nope"],
+        ["--wavelet-param", "regularize"],
+        ["--wavelet-param", "method=paper"],
+        ["--wavelet-method", "flimfret"],
+    ],
+)
+def test_bad_wavelet_args_are_parser_errors(tmp_path: Path, bad: list[str]) -> None:
+    h5 = tmp_path / "a.h5"
+    h5.write_bytes(b"")
+    with pytest.raises(SystemExit) as exc:
+        cli.main([str(h5), *bad])
+    assert exc.value.code == 2
+
+
+def test_help_lists_wavelet_levers(capsys) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    out = capsys.readouterr().out
+    assert "--wavelet-method" in out
+    assert "--wavelet-param" in out
+    assert "local_variance" in out

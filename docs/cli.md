@@ -127,6 +127,8 @@ percell4-batch-phasor PATHS [options]
 |---|---|
 | `paths` | One or more `.h5` files, or directories containing `.h5` files. Directories are globbed non-recursively (`*.h5`). **Required.** |
 | `--filter-level FILTER_LEVEL` | Wavelet filter level (1..30). Default: `9`. |
+| `--wavelet-method {leelab,paper}` | Wavelet algorithm preset. `leelab` (default) matches the reference `ComplexWaveletFilter.py`; `paper` is the strict Wang et al. 2021 BiShrink (MAD from the finest-level ±45° bands, σ² threshold divided by the local signal std, 7×7 window, no regulariser, algebraic inverse Anscombe). |
+| `--wavelet-param KEY=VALUE` | Override one lever of the chosen preset (repeatable). Keys: `noise_bands` (`all`, `finest_diagonal`), `sigma_exponent` (float), `local_variance` (`gate`, `divide`), `regularize` (bool), `window_radius` (int, `0` = LeeLab rule), `biort` (`Legall`, `near_sym_a`, `near_sym_b`), `anscombe_clamp` (`before`, `after`), `inverse_anscombe` (`exact`, `algebraic`), `shrink_coarsest` (bool). The preset with any lever moved is stamped on the dataset as `custom`. |
 | `--overwrite` | Recompute channels even when `/phasor/<ch>/g` already exists. Default: skip channels with existing phasor. |
 | `--remove` | Inverse mode: delete `/phasor/<ch>/` (all of g, s, g_filtered, s_filtered, lifetime_filtered) for every channel in each dataset instead of computing. Mutually exclusive with `--overwrite`. `--filter-level` is ignored when `--remove` is set. |
 | `--quiet` | Suppress per-channel skip / error detail lines. The per-dataset summary line and final totals always print. |
@@ -138,6 +140,8 @@ Examples:
 percell4-batch-phasor dish_1.h5 dish_2.h5
 percell4-batch-phasor /scratch/dishes/ --filter-level 5
 percell4-batch-phasor *.h5 --overwrite --quiet
+percell4-batch-phasor *.h5 --wavelet-method paper
+percell4-batch-phasor *.h5 --wavelet-method paper --wavelet-param regularize=true
 percell4-batch-phasor /scratch/dishes/ --remove
 ```
 
