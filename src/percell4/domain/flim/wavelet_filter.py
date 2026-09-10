@@ -50,7 +50,7 @@ from scipy.ndimage import uniform_filter
 logger = logging.getLogger(__name__)
 
 # Maximum wavelet decomposition depth offered to users. The GUI spinbox and
-# the batch CLIs (percell4-batch-phasor / batch_compute_phasor) share this one
+# the batch CLIs (percell-batch-phasor / batch_compute_phasor) share this one
 # ceiling. It is NOT a DTCWT hard limit — dtcwt pads internally and accepts far
 # more — but a generous, sane cap. Real microscopy images saturate their
 # meaningful scales (~log2 of the image dimension) well below this, while it

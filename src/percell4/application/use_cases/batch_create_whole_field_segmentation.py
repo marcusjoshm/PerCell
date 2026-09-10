@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # The single resource name written by this use case. Hard-coded by
 # design — every dataset gets the same name so downstream tools can
 # look it up unambiguously. Users who need a different name can run
-# percell4-batch-rename --kind segmentation afterwards.
+# percell-batch-rename --kind segmentation afterwards.
 WHOLE_FIELD_NAME = "whole_field"
 
 

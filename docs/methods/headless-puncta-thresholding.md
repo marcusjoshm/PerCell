@@ -242,7 +242,7 @@ the harness narrows the field, and the final operating point is chosen by a
 ### 5.4 Running it
 
 ```
-percell4-batch-validate-puncta <dataset.h5> \
+percell-batch-validate-puncta <dataset.h5> \
     --gt-dir labels/ --channel <ch> --seg-name <labels> \
     --tier-b-mask <old_mask> \
     --detectors log dog --backgrounds gaussian-peak \

@@ -107,7 +107,7 @@ _QSETTINGS_SEG_QC_NEW_KEY = "single_cell_threshold_workflow/run_seg_qc_on_new"
 _ALWAYS_ON_COLUMNS = ("dataset", "cell_id", "label")
 
 # Core per-cell columns the user may opt into. Aliased to the shared
-# Qt-free source of truth (also consumed by percell4-batch-measure).
+# Qt-free source of truth (also consumed by percell-batch-measure).
 _CORE_OPTIONAL_COLUMNS = CORE_OPTIONAL_COLUMNS
 
 # Particle-analysis per-cell summary metrics (U7). Single value per cell;
@@ -676,7 +676,7 @@ class WorkflowConfigDialog(QDialog):
         self._run_seg_qc.setChecked(True)
         self._run_seg_qc.setToolTip(
             "When checked, datasets that arrive already segmented (e.g. from "
-            "percell4-batch) open their selected segmentation layer in the QC "
+            "percell-batch) open their selected segmentation layer in the QC "
             "editor so you can review and correct it before thresholding. "
             "Uncheck to trust the existing segmentation and go straight to "
             "group thresholding. Skipped for time-lapse datasets."
@@ -2584,7 +2584,7 @@ class WorkflowConfigDialog(QDialog):
         """Compute the full list of CSV columns from the user's channel + metric selection.
 
         Delegates to the shared Qt-free :func:`build_selected_csv_columns`
-        (also used by ``percell4-batch-measure``) so the GUI and CLI exports
+        (also used by ``percell-batch-measure``) so the GUI and CLI exports
         cannot drift. Identity columns (dataset, cell_id, label) are always
         prepended by the export step regardless of what's in this list. The
         ``_out_<round>`` overlap variants are intentionally NOT emitted —

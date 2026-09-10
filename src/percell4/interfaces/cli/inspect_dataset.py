@@ -10,10 +10,10 @@ the array — so inspecting a multi-gigabyte stack is fast (see
 ``docs/solutions/logic-errors/large-file-load-metadata-read-full-decode-2026-06-07.md``).
 
 Usage:
-    percell4-inspect dish_1.h5 dish_2.h5
-    percell4-inspect /scratch/dishes/            # every *.h5 in the dir
-    percell4-inspect dish_1.h5 --json            # machine-readable output
-    percell4-inspect /scratch/dishes/ --grep PFA # only matching descriptions
+    percell-inspect dish_1.h5 dish_2.h5
+    percell-inspect /scratch/dishes/            # every *.h5 in the dir
+    percell-inspect dish_1.h5 --json            # machine-readable output
+    percell-inspect /scratch/dishes/ --grep PFA # only matching descriptions
 
 Exit codes:
     0 -- at least one dataset was reported
@@ -190,7 +190,7 @@ def _print_human(info: dict[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="percell4-inspect",
+        prog="percell-inspect",
         description=(
             "Print metadata, the free-text description, and the layer "
             "inventory (intensity, segmentations, masks, groups, tracks) for "

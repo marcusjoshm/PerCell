@@ -115,7 +115,7 @@ def _print_item_status(
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-export-phasor",
+        prog="percell-batch-export-phasor",
         description=(
             "Batch-export cached phasors as PNG files across one or "
             "more .h5 datasets.\n\n"
@@ -131,16 +131,16 @@ def main(argv: list[str] | None = None) -> int:
             "runs.\n\n"
             "Out of scope: this CLI does NOT compute phasors. Channels "
             "with no /phasor/<ch>/g are reported as skipped -- run "
-            "percell4-batch-phasor first."
+            "percell-batch-phasor first."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-export-phasor dish_1.h5 dish_2.h5 "
+            "  percell-batch-export-phasor dish_1.h5 dish_2.h5 "
             "--output-dir /tmp/phasors\n"
-            "  percell4-batch-export-phasor /scratch/dishes/ "
+            "  percell-batch-export-phasor /scratch/dishes/ "
             "--output-dir ~/phasors/\n"
-            "  percell4-batch-export-phasor *.h5 --output-dir out/ "
+            "  percell-batch-export-phasor *.h5 --output-dir out/ "
             "--quiet\n"
         ),
     )

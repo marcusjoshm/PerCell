@@ -1,7 +1,7 @@
 """PerCell4 development entry point.
 
 Run with: python main.py
-Or after install: percell4-gui
+Or after install: percell
 """
 
 if __name__ == "__main__":

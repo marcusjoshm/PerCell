@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-rename",
+        prog="percell-batch-rename",
         description=(
             "Batch-rename a single channel, mask, or segmentation "
             "across one or more .h5 datasets.\n\n"
@@ -71,11 +71,11 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-rename dish_1.h5 dish_2.h5 \\\n"
+            "  percell-batch-rename dish_1.h5 dish_2.h5 \\\n"
             "      --kind channel --from-name mScar --to-name mScarlet\n"
-            "  percell4-batch-rename /scratch/dishes/ \\\n"
+            "  percell-batch-rename /scratch/dishes/ \\\n"
             "      --kind mask --from-name thresh_old --to-name thresh_new\n"
-            "  percell4-batch-rename *.h5 \\\n"
+            "  percell-batch-rename *.h5 \\\n"
             "      --kind segmentation --from-name cellpose_qc \\\n"
             "      --to-name cp_mask --dry-run\n"
         ),

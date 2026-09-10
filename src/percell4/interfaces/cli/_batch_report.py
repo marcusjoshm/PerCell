@@ -1,13 +1,13 @@
 """Shared helpers for batch-* CLIs (rename, delete).
 
-Both ``percell4-batch-rename`` and ``percell4-batch-delete`` produce
+Both ``percell-batch-rename`` and ``percell-batch-delete`` produce
 the same shape of report — a list of per-dataset items, each with
 status + processed/skipped/errors collections — and want to print
 them the same way modulo the verb ("renamed" vs "deleted"). This
 module is the one place those helpers live so the two CLIs stay in
 lockstep.
 
-``percell4-batch-phasor`` predates this module and keeps its in-file
+``percell-batch-phasor`` predates this module and keeps its in-file
 copies of these helpers for now. A follow-up could consolidate, but
 the duplication is small and stable enough that it isn't worth a
 breaking refactor on a different CLI's branch.

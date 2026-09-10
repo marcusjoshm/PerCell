@@ -7,13 +7,13 @@ carry a segmentation (``/labels/<name>``) and the mask(s) to measure
 a timestamped run folder of CSVs/parquet under ``--output``; measurements
 never go back into the .h5 files (the provenance invariant).
 
-Pairs with ``percell4-batch-threshold`` (which writes the masks) and
+Pairs with ``percell-batch-threshold`` (which writes the masks) and
 mirrors the GUI "use existing masks" workflow.
 
 Usage:
-    percell4-batch-measure dish_1.h5 dish_2.h5 --segmentation cellpose \\
+    percell-batch-measure dish_1.h5 dish_2.h5 --segmentation cellpose \\
         --mask pbody --min-particle-area 9 --output ~/runs
-    percell4-batch-measure /scratch/dishes/ --mask grouped --csv-preset all
+    percell-batch-measure /scratch/dishes/ --mask grouped --csv-preset all
 
 Exit codes:
     0 -- at least one dataset was measured and the export landed
@@ -47,7 +47,7 @@ def _configure_logging(verbose: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-measure",
+        prog="percell-batch-measure",
         description=(
             "Measure per-cell metrics + particle analysis over existing masks "
             "and export CSVs/parquet into a run folder. Requires each dataset "

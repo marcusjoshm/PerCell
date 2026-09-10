@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-whole-field",
+        prog="percell-batch-whole-field",
         description=(
             "Create /labels/whole_field (every pixel = 1) in each input "
             ".h5 dataset."
@@ -59,8 +59,8 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-whole-field dish_1.h5 dish_2.h5\n"
-            "  percell4-batch-whole-field /scratch/dishes/ --dry-run\n"
+            "  percell-batch-whole-field dish_1.h5 dish_2.h5\n"
+            "  percell-batch-whole-field /scratch/dishes/ --dry-run\n"
             "\n"
             "Notes:\n"
             "  - Shape is taken from /metadata.native_shape, falling\n"

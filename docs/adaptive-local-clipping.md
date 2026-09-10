@@ -1,6 +1,6 @@
 # Adaptive Local Clipping (ALC)
 
-Adaptive Local Clipping is PerCell4's universal puncta detection method. It segments punctate structures inside individual cells without requiring a hand-tuned intensity threshold. It is available in the GUI thresholding workflow and headlessly via `percell4-batch-threshold --strategy adaptive-clip` (single-window) or `--strategy auto-extract` (two-pass auto-extraction).
+Adaptive Local Clipping is PerCell4's universal puncta detection method. It segments punctate structures inside individual cells without requiring a hand-tuned intensity threshold. It is available in the GUI thresholding workflow and headlessly via `percell-batch-threshold --strategy adaptive-clip` (single-window) or `--strategy auto-extract` (two-pass auto-extraction).
 
 ## Motivation
 

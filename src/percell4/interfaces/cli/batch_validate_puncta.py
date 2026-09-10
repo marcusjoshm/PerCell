@@ -4,8 +4,8 @@ Headless front-end for the dev-time validation harness
 :mod:`percell4.workflows.puncta_validation` (plan U5).
 
 Usage:
-    percell4-batch-validate-puncta DS1.h5 --gt-dir labels/ --channel GFP
-    percell4-batch-validate-puncta DS1.h5 --gt-dir labels/ --channel GFP \\
+    percell-batch-validate-puncta DS1.h5 --gt-dir labels/ --channel GFP
+    percell-batch-validate-puncta DS1.h5 --gt-dir labels/ --channel GFP \\
         --tier-b-mask old_qc --detectors log dog --k 2.0 2.5 3.0 --out locked.json
 
 Inputs:
@@ -57,7 +57,7 @@ def _settings_to_dict(settings) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-validate-puncta",
+        prog="percell-batch-validate-puncta",
         description=(
             "Race puncta-detection methods against hybrid ground truth and "
             "lock a qualifying winner."
@@ -65,9 +65,9 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-validate-puncta DS1.h5 --gt-dir labels/ "
+            "  percell-batch-validate-puncta DS1.h5 --gt-dir labels/ "
             "--channel GFP\n"
-            "  percell4-batch-validate-puncta DS1.h5 --gt-dir labels/ "
+            "  percell-batch-validate-puncta DS1.h5 --gt-dir labels/ "
             "--channel GFP --tier-b-mask old_qc --out locked.json\n"
         ),
     )
