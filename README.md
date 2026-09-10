@@ -16,8 +16,8 @@ and built on Qt, napari, scikit-image and h5py.
 
 Every batch operation is also available as a headless command-line tool.
 
-> PerCell4 is under active development and currently pre-release (0.1.0). Interfaces and
-> file layouts may still change between versions.
+> PerCell4 is under active development. The current release is 0.4.0 (see
+> [Versions](#versions)); interfaces and file layouts may still change between versions.
 
 <p align="center">
   <img src="art/main-window.png" width="900" alt="The PerCell4 launcher, session controls, image viewer, and phasor plot, showing a FLIM phasor histogram against the universal semicircle">
@@ -35,7 +35,7 @@ Every batch operation is also available as a headless command-line tool.
 | [Writing an analysis](docs/writing_an_analysis.md) | Adding a new analysis module |
 | [Adaptive Local Clipping](docs/adaptive-local-clipping.md) | The puncta detection method in full |
 | [Methods](docs/methods/) | How puncta detection works, and its validation record |
-| [Changelog](docs/CHANGELOG.md) | Dated feature history |
+| [Changelog](docs/CHANGELOG.md) | Version history |
 
 ## Installation
 
@@ -96,10 +96,34 @@ See the [command-line reference](docs/cli.md) for all tools and options.
 - **Batch workflows and analysis** — end-to-end analysis workflows and particle analysis,
   configured in the GUI or run from dedicated CLI tools.
 
+## Versions
+
+This repository holds the full history of PerCell. Each earlier generation was a separate
+repository; they are available here as tags:
+
+| Tag | Generation | What it was |
+|---|---|---|
+| `v0.1.0` | microscopy-analysis-single-cell (2025) | Command-line workflow for LAS X exports: Cellpose segmentation and per-cell analysis |
+| `v0.2.0` | PerCell (2025–2026) | Cellpose plus ImageJ macros behind an interactive command-line interface |
+| `v0.3.0` | PerCell3 (2026) | Platform built on OME-Zarr and SQLite, with Cellpose and napari |
+| `v0.4.0` | PerCell4 (2026) | This application: a standalone GUI on HDF5 and pandas, and the base of current development |
+
+To look at an earlier generation, check out its tag:
+
+```bash
+git checkout v0.2.0
+```
+
+The version the package reports comes from the nearest tag in the checkout's history:
+`0.4.0` at the tag, `0.4.1.devN` on later commits. After a new tag, refresh an editable
+install with `pip install -e .` so the reported version follows. The `development` branch
+is a testing branch with no version tag in its history, so installs from it report a
+placeholder such as `0.0.1.devN`.
+
 ## Reporting issues
 
 PerCell4 is a developing project and reports are greatly appreciated! Questions and bug
-reports are welcome in [GitHub issues](https://github.com/marcusjoshm/percell4/issues).
+reports are welcome in [GitHub issues](https://github.com/marcusjoshm/PerCell/issues).
 Please include your operating system, Python version, and the output of
 `percell4-inspect` for the dataset involved where relevant.
 

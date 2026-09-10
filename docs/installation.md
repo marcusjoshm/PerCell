@@ -250,10 +250,10 @@ pip install -U "cellpose>=4.2,<5"
 
 ## Install from a wheel
 
-If you have a built wheel (for example `dist/percell4-0.1.0-py3-none-any.whl`):
+If you have a built wheel (for example `dist/percell4-0.4.0-py3-none-any.whl`; the version in the filename comes from the git tag the wheel was built from):
 
 ```bash
-pip install path/to/percell4-0.1.0-py3-none-any.whl
+pip install path/to/percell4-<version>-py3-none-any.whl
 percell4-gui
 ```
 

@@ -1,13 +1,14 @@
 # Changelog
 
-Notable user-facing changes to PerCell4, newest first. PerCell4 is pre-release
-(`0.1.0`, no tagged releases yet), so entries are grouped by the **month they
-were implemented** rather than by version. Dates are drawn from the repository's
-commit history and from the dated planning documents on the `development`
-branch; see [Key features](../README.md#key-features) in the README for
-the current list.
+Notable user-facing changes to PerCell, newest first, in
+[Keep a Changelog](https://keepachangelog.com/) form. Versions are git tags
+(`v0.4.0` is the tip of PerCell4 when the four generations were consolidated into
+one repository; see [Versions](../README.md#versions)). Within a version, entries
+are grouped by the month they were implemented, with dates drawn from the
+repository's commit history; see [Key features](../README.md#key-features) in
+the README for the current list.
 
-## Unreleased
+## [Unreleased]
 
 ### Added
 
@@ -27,6 +28,17 @@ the current list.
   cached variant differs from the requested one. `percell4-batch-phasor`
   takes the same choices via `--wavelet-method` and repeatable
   `--wavelet-param KEY=VALUE`.
+
+## [0.4.0] — 2026-09-10
+
+PerCell4: a standalone desktop application on HDF5 and pandas, integrating Cellpose,
+napari, and pyqtgraph for single-cell segmentation, tracking, thresholding, FLIM phasor
+analysis, and measurement across timepoints and conditions. Everything below was
+implemented between 2026-03 and 2026-09 under the working version `0.1.0`.
+
+### 2026-07 – 2026-09 — Calibration from LAS X metadata, Cellpose 4.2, segmentation previews
+
+#### Added
 
 - **FLIM calibration from a `.xml` metadata export.** The Batch TCSPC
   dialog's calibration step now also accepts the `.xml` file written by the
@@ -77,7 +89,15 @@ the current list.
   circle is drawn. The circle is display-only: it is never saved to the `.h5`,
   never affects segmentation, and cannot be dragged or reshaped.
 
-### Changed
+- **Cellpose 4.2 models are now selectable.** The Segment tab, workflow dialog,
+  and batch CLIs (`--cellpose-model`) offer the Cellpose 4.x built-ins —
+  `cpsam_v2` (new default; improved CellposeSAM, fewer spurious masks in
+  low-contrast regions), `cpsam` (original, for reproducing prior runs),
+  `cpdino`, and `cpdino-vitb` (DINOv3 backbones). The 4.x wrapper now forwards
+  the chosen model via `CellposeModel(pretrained_model=...)` (previously the
+  model name was dropped on 4.x).
+
+#### Changed
 
 - **The workflow config dialog's Thresholding Rounds editor is now a card list.**
   Each round is a full-width card showing only the fields for its selected method
@@ -113,24 +133,6 @@ the current list.
     the histogram segmenter from the same green "Classify Mask by CNR" button.
   - The pre-cleanup interface is preserved on the `dev-features` branch.
 
-### Fixed
-
-- **Adaptive Local Clipping time-lapse tests were failing.** The commit that
-  added the coarse fill-factor and FDR controls passed two new arguments the
-  test doubles did not accept; removing those controls makes them match again.
-
-### Added
-
-- **Cellpose 4.2 models are now selectable.** The Segment tab, workflow dialog,
-  and batch CLIs (`--cellpose-model`) offer the Cellpose 4.x built-ins —
-  `cpsam_v2` (new default; improved CellposeSAM, fewer spurious masks in
-  low-contrast regions), `cpsam` (original, for reproducing prior runs),
-  `cpdino`, and `cpdino-vitb` (DINOv3 backbones). The 4.x wrapper now forwards
-  the chosen model via `CellposeModel(pretrained_model=...)` (previously the
-  model name was dropped on 4.x).
-
-### Changed
-
 - Default segmentation model is now **`cpsam_v2`** (was `cpsam`) — re-running
   Cellpose yields improved, slightly different masks.
 - Minimum Cellpose is now **4.2** (`cellpose>=4.2,<5`); the legacy 3.x code path
@@ -138,9 +140,15 @@ the current list.
   `pip install -U cellpose` (or reinstall the package) to pull 4.2.x.** A saved
   workflow config referencing a removed model falls back to `cpsam_v2`.
 
-## 2026-06 — Overlap-aware stitching, adaptive clipping, CNR
+#### Fixed
 
-### Added
+- **Adaptive Local Clipping time-lapse tests were failing.** The commit that
+  added the coarse fill-factor and FDR controls passed two new arguments the
+  test doubles did not accept; removing those controls makes them match again.
+
+### 2026-06 — Overlap-aware stitching, adaptive clipping, CNR
+
+#### Added
 
 - **Overlap-aware mosaic tile stitching.** Phase-correlation registration on the
   tile **overlap region** (matching the Fiji/ImageJ Grid-Collection approach),
@@ -164,18 +172,18 @@ the current list.
 - **Segment-tab Cellpose settings parity** so interactive and headless
   (`percell4-batch-cellpose-laptrack`) runs share the same controls. (2026-06-03)
 
-### Changed
+#### Changed
 
 - Faster load times for large datasets. (2026-06-06)
 
-### Fixed
+#### Fixed
 
 - Channels renamed at import (Manual mode) are now valid stitch registration
   references. (2026-06-25)
 
-## 2026-05 — Time-lapse tracking, phasor masks, batch CLIs
+### 2026-05 — Time-lapse tracking, phasor masks, batch CLIs
 
-### Added
+#### Added
 
 - **Time-lapse tracking + lineage** (powered by laptrack): import `_tN` series as a
   single multi-timepoint dataset, segment every frame, track each cell with one ID
@@ -201,9 +209,9 @@ the current list.
   step-by-step workflow protocol. (2026-05-21)
 - **Windows-via-WSL** install path. (2026-05-14)
 
-## 2026-04 — Workflows, batch compress, hexagonal architecture
+### 2026-04 — Workflows, batch compress, hexagonal architecture
 
-### Added
+#### Added
 
 - **Single-cell thresholding workflow:** `BaseWorkflowRunner` generator-driven state
   machine with interactive QC and pause/resume via `run_state.json`. (2026-04-10 – 04-11)
@@ -218,19 +226,19 @@ the current list.
 - **Phasor UX:** active-mask histogram filter, Save Phasor PNG, `nipy_spectral`
   density colormap. (2026-04-30)
 
-### Changed
+#### Changed
 
 - _Internal:_ hexagonal-architecture refactor (domain / application / adapters /
   ports seams; CLI adapter validates the seam). (2026-04-16)
 
-### Fixed
+#### Fixed
 
 - Structured worker errors with an actionable torch error dialog, and a startup
   warning when the Windows MSVC redistributable is too old. (2026-04-17)
 
-## 2026-03 — Foundation
+### 2026-03 — Foundation
 
-### Added
+#### Added
 
 - Project scaffolding and the **HDF5 `DatasetStore` + `ProjectIndex`** (one `.h5`
   per experiment). (2026-03-25 – 03-26)
@@ -245,3 +253,21 @@ the current list.
 - **Multi-window GUI** (launcher, napari viewer, data plot, cell table) on a single
   `CellDataModel`; cross-window selection and a cell filter shared across windows;
   single-pass multi-ROI measurement. (2026-03-26 – 03-27)
+
+## [0.3.0] — 2026-03-09
+
+PerCell3. Single-cell microscopy analysis platform built on OME-Zarr and SQLite,
+integrating Cellpose and napari for custom single-cell workflows. Superseded by
+PerCell4, which moved storage to HDF5 and added the standalone GUI.
+
+## [0.2.0] — 2026-02-18
+
+PerCell (second generation). Cellpose segmentation integrated with ImageJ macros
+in one package behind an interactive command-line interface. Its own packaging
+called itself `1.0.0`; in this lineage it is `0.2.0`.
+
+## [0.1.0] — 2025-06-30
+
+microscopy-analysis-single-cell. The first version: an automated workflow for
+LAS X-exported data with Cellpose segmentation, an interactive CLI, and support for
+single- and multi-timepoint experiments.
