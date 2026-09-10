@@ -518,7 +518,10 @@ def _filter_channel(
 
     transformed = anscombe_transform(padded, clamp=params.anscombe_clamp)
 
-    xfm = dtcwt.Transform2d(biort=params.biort, qshift="qshift_a")
+    # dtcwt resolves the basis name to a data file (``legall.npz``); the lookup
+    # is case-sensitive on Linux, so the user-facing ``Legall`` label is
+    # lowercased here rather than renamed in presets, params, and saved files.
+    xfm = dtcwt.Transform2d(biort=params.biort.lower(), qshift="qshift_a")
     coeffs = xfm.forward(transformed, nlevels=n_levels)
 
     sigma = estimate_noise_sigma(coeffs, noise_bands=params.noise_bands)
