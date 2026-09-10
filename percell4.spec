@@ -10,7 +10,26 @@ Output: dist/PerCell4/ (folder with PerCell4 executable)
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+
+
+def _bundle_version() -> str:
+    """Dotted-integer version for the macOS plist, from the installed package.
+
+    The package version is tag-derived (setuptools-scm); Apple wants plain
+    ``major.minor.patch`` here, so any ``.devN+g<hash>`` suffix is dropped.
+    """
+    try:
+        from importlib.metadata import version
+
+        from packaging.version import Version
+
+        return Version(version("percell4")).base_version
+    except Exception:
+        return "0.0.0"
+
+
+_bundle_version_str = _bundle_version()
 
 src_dir = str(Path("src"))
 
@@ -58,6 +77,8 @@ _datas = (
     + collect_data_files("skimage")
     # Bundle our own icon resources so app_icon_path() resolves when frozen
     + collect_data_files("percell4.resources", includes=["*.png", "*.ico", "*.icns"])
+    # Ship the dist-info so importlib.metadata.version("percell4") works frozen
+    + copy_metadata("percell4")
 )
 
 # Platform-native application icons (built from src/percell4/resources)
@@ -126,8 +147,8 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "PerCell4",
             "CFBundleDisplayName": "PerCell4",
-            "CFBundleVersion": "0.1.0",
-            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleVersion": _bundle_version_str,
+            "CFBundleShortVersionString": _bundle_version_str,
             "NSHighResolutionCapable": True,
         },
     )
