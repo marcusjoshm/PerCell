@@ -3,7 +3,7 @@
 The single source of truth for which measurement columns land in the
 workflow's ``combined.csv`` / ``per_dataset/*.csv`` exports. Both the GUI
 config dialog (``WorkflowConfigDialog``) and the headless
-``percell4-batch-measure`` CLI build their selected-column lists from
+``percell-batch-measure`` CLI build their selected-column lists from
 :func:`build_selected_csv_columns` seeded by the ``DEFAULT_*`` constants,
 so the two surfaces cannot drift.
 

@@ -4,14 +4,14 @@ Computes one grouped-threshold round per invocation and writes
 ``/masks/<round>`` + ``/groups/<round>`` back into each .h5. Requires each
 dataset to already carry a segmentation (``/labels/<name>``); this tool
 does not segment. It does not measure or export — run
-``percell4-batch-measure`` afterwards for CSVs.
+``percell-batch-measure`` afterwards for CSVs.
 
 Usage:
-    percell4-batch-threshold dish_1.h5 dish_2.h5 --channel GFP \\
+    percell-batch-threshold dish_1.h5 dish_2.h5 --channel GFP \\
         --round-name GFP_bright --algorithm kmeans --kmeans-n-clusters 3
-    percell4-batch-threshold /scratch/dishes/ --channel RFP \\
+    percell-batch-threshold /scratch/dishes/ --channel RFP \\
         --round-name RFP_pos --algorithm gmm --gmm-criterion bic --overwrite
-    percell4-batch-threshold dish_1.h5 --channel RFP --round-name SG_iter \\
+    percell-batch-threshold dish_1.h5 --channel RFP --round-name SG_iter \\
         --strategy iterative-otsu --iterative-scope per-cell \\
         --stop-criteria bg-floor,positive-fraction-high \\
         --stop-param bg-floor.k=2.5 --verbose
@@ -73,11 +73,11 @@ def _parse_stop_param(spec: str) -> tuple[str, object]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-threshold",
+        prog="percell-batch-threshold",
         description=(
             "Run one grouped-threshold round across datasets, writing "
             "/masks/<round> + /groups/<round> into each .h5. Requires existing "
-            "/labels. Does not measure or export — use percell4-batch-measure next."
+            "/labels. Does not measure or export — use percell-batch-measure next."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -442,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         ds_args = " ".join(str(p) for p in args.datasets)
         print(
             "Next: measure + export with\n"
-            f"  percell4-batch-measure {ds_args} "
+            f"  percell-batch-measure {ds_args} "
             f"--segmentation {args.segmentation or '<seg>'} --mask {args.round_name} --output <dir>"
         )
     return 0 if n_ok > 0 else 1

@@ -41,7 +41,7 @@ class CommandLineEdit(QLineEdit):
         self.setCompleter(self._completer)
 
         self.setAcceptDrops(True)
-        self.setPlaceholderText("Type a percell4-* command, or pick a tool above…")
+        self.setPlaceholderText("Type a percell-* command, or pick a tool above…")
         self.returnPressed.connect(self._on_return)
 
     # ── public API ──────────────────────────────────────────────────────

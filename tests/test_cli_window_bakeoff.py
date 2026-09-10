@@ -1,4 +1,4 @@
-"""Tests for the percell4-window-bakeoff CLI (plan U7)."""
+"""Tests for the percell-window-bakeoff CLI (plan U7)."""
 
 from __future__ import annotations
 

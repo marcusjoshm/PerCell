@@ -1,4 +1,4 @@
-"""Tests for the percell4-batch-phasor-masks CLI entry point.
+"""Tests for the percell-batch-phasor-masks CLI entry point.
 
 Exercises argparse, path resolution, up-front validation (channel
 intersection, suffix sanity, collision), the seam between the CLI and

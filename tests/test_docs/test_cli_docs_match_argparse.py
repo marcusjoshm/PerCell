@@ -17,7 +17,7 @@ complete, and nothing past argument construction executes.
 The doc-side contract this asserts, which ``docs/cli.md`` must keep:
 
 * every command has an ``##`` heading whose first element is the exact console
-  script name in backticks -- ``## `percell4-batch-export` -- TIFF export``
+  script name in backticks -- ``## `percell-batch-export` -- TIFF export``
 * every flag appears as an inline code span in the first column of that
   command's option table
 
@@ -60,7 +60,7 @@ def _console_scripts() -> dict[str, str]:
 def _gui_scripts() -> dict[str, str]:
     """``[project.gui-scripts]`` -- installed commands too, but not argparse CLIs.
 
-    ``percell4-gui`` launches the Qt app and takes no flags, so it is a valid
+    ``percell`` launches the Qt app and takes no flags, so it is a valid
     thing to see in a documented example while being outside the flag contract.
     """
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
@@ -134,7 +134,11 @@ def _documented_flags(section_body: str) -> set[str]:
     return flags - AUTO_FLAGS
 
 
-SCRIPTS = _console_scripts()
+# ``percell4-*`` entries are pre-0.5 aliases of the ``percell-*`` scripts (same
+# targets); docs/cli.md documents each tool once under its current name.
+SCRIPTS = {
+    name: target for name, target in _console_scripts().items() if not name.startswith("percell4-")
+}
 GUI_SCRIPTS = _gui_scripts()
 
 
@@ -161,7 +165,7 @@ EXAMPLE_DOCS = (
 
 
 def _example_invocations(text: str) -> list[tuple[str, list[str]]]:
-    """Every ``percell4-*`` invocation inside a fenced block, as (command, flags).
+    """Every ``percell-*`` invocation inside a fenced block, as (command, flags).
 
     Joins backslash continuations and drops trailing comments so a wrapped,
     annotated example is read as one command.
@@ -183,7 +187,7 @@ def _example_invocations(text: str) -> list[tuple[str, list[str]]]:
         full = (pending + line).strip()
         pending = ""
         tokens = full.split()
-        if not tokens or not tokens[0].startswith("percell4-"):
+        if not tokens or not tokens[0].startswith("percell-"):
             continue
         flags = []
         for token in tokens[1:]:

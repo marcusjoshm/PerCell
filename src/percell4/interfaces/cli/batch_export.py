@@ -94,7 +94,7 @@ def _print_item_status(
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-export",
+        prog="percell-batch-export",
         description=(
             "Batch-export dataset layers as TIFF files across one or "
             "more .h5 datasets.\n\n"
@@ -112,10 +112,10 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-export dish_1.h5 dish_2.h5 --output-dir /tmp/exports\n"
-            "  percell4-batch-export /scratch/dishes/ --output-dir ~/exports/\n"
-            "  percell4-batch-export *.h5 --output-dir out/ --quiet\n"
-            "  percell4-batch-export *.h5 --output-dir out/ --view-bin 4\n"
+            "  percell-batch-export dish_1.h5 dish_2.h5 --output-dir /tmp/exports\n"
+            "  percell-batch-export /scratch/dishes/ --output-dir ~/exports/\n"
+            "  percell-batch-export *.h5 --output-dir out/ --quiet\n"
+            "  percell-batch-export *.h5 --output-dir out/ --view-bin 4\n"
             "\n"
             "View-bin: --view-bin N applies the same sum/majority-vote\n"
             "downsampling the GUI uses for view_bin=N, producing TIFFs\n"

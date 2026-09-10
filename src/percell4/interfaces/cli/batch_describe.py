@@ -49,12 +49,12 @@ logger = logging.getLogger(__name__)
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-describe",
+        prog="percell-batch-describe",
         description=(
             "Set, append to, or clear the free-text experiment description "
             "on one or more .h5 datasets.\n\n"
             "The description is stored inside the .h5 itself, so it travels "
-            "with the file. Read it back with percell4-inspect, or in the "
+            "with the file. Read it back with percell-inspect, or in the "
             "Data tab of the PerCell4 launcher.\n\n"
             "Exactly one verb is required. --set replaces whatever is there; "
             "--append adds the new text below the existing text, separated "
@@ -71,13 +71,13 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-describe dish_1.h5 dish_2.h5 \\\n"
+            "  percell-batch-describe dish_1.h5 dish_2.h5 \\\n"
             "      --set 'HeLa p14, fixed 4% PFA 15min'\n"
-            "  percell4-batch-describe /scratch/experiment_7/ \\\n"
+            "  percell-batch-describe /scratch/experiment_7/ \\\n"
             "      --append '2h 10uM drug at 37C, 5% CO2'\n"
-            "  percell4-batch-describe /scratch/experiment_7/ \\\n"
+            "  percell-batch-describe /scratch/experiment_7/ \\\n"
             "      --append 'shared prep notes' --dry-run\n"
-            "  percell4-batch-describe dish_3.h5 --clear\n"
+            "  percell-batch-describe dish_3.h5 --clear\n"
         ),
     )
     parser.add_argument(

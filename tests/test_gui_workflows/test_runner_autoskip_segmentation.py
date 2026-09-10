@@ -212,7 +212,7 @@ def test_presegmented_timelapse_stack_skips_seg_qc(qtbot, tmp_path):
 
 
 def test_presegmented_2d_gate_on_timelapse_runs_seg_qc(qtbot, tmp_path):
-    # A 2D whole-field gate (e.g. percell4-batch-whole-field) on a
+    # A 2D whole-field gate (e.g. percell-batch-whole-field) on a
     # time-lapse dataset IS editable in the single-frame editor, so it
     # runs seg-QC — the guard keys on label rank, not n_timepoints.
     p = tmp_path / "DS1.h5"

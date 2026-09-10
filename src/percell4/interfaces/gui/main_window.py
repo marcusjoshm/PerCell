@@ -955,7 +955,7 @@ class LauncherWindow(QMainWindow):
         re-shows the viewer (a documented tradeoff; a non-resetting surgical
         refresh is deferred). No-op when nothing is open.
 
-        Note: ``percell4-batch-measure`` writes external CSV/parquet run
+        Note: ``percell-batch-measure`` writes external CSV/parquet run
         folders, not the ``.h5``, and the app has no on-open
         measurements-from-disk load — so per-cell measurements are not part
         of this reload.

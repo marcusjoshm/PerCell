@@ -759,7 +759,7 @@ class PhasorPlotWindow(QMainWindow):
         self._update_ref_circle_overlay()
 
         # Multi-vector cache invalidation (per
-        # percell4-selection-filtering-multi-roi-patterns.md Pattern 5):
+        # percell-selection-filtering-multi-roi-patterns.md Pattern 5):
         # every per-ROI cached mask + the active-mask flat cache.
         for w in self._roi_widgets:
             w.cached_mask = None

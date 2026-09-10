@@ -1,4 +1,4 @@
-"""Tests for the percell4-batch-threshold CLI (headless grouped thresholding)."""
+"""Tests for the percell-batch-threshold CLI (headless grouped thresholding)."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def test_batch_threshold_writes_binary_mask(tmp_path, capsys):
     # /groups table written too.
     assert "GFP_hi" in store.list_groups("groups")
     # Hand-off line points the user at the measure CLI.
-    assert "percell4-batch-measure" in capsys.readouterr().out
+    assert "percell-batch-measure" in capsys.readouterr().out
 
 
 def test_batch_threshold_missing_labels_skips(tmp_path, capsys):

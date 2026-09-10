@@ -280,7 +280,7 @@ def _print_dry_run_plan(
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-phasor-masks",
+        prog="percell-batch-phasor-masks",
         description=(
             "Batch-fit a phasor ellipse + write two dual-threshold "
             "phasor masks per channel across one or more .h5 datasets.\n\n"
@@ -289,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
             "two intensity-thresholded ellipse-membership masks "
             "(--t-mask-a → suffix-a, --t-mask-b → suffix-b). When a "
             "dataset lacks pre-computed phasor maps, they are computed "
-            "on the fly using the same primitives percell4-batch-phasor "
+            "on the fly using the same primitives percell-batch-phasor "
             "uses.\n\n"
             "Up-front validation: every requested channel must be "
             "present in every dataset; suffixes must be non-empty and "
@@ -303,11 +303,11 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-phasor-masks dish_1.h5 dish_2.h5 \\\n"
+            "  percell-batch-phasor-masks dish_1.h5 dish_2.h5 \\\n"
             "      --channels mNG mScarlet\n"
-            "  percell4-batch-phasor-masks /scratch/dishes/ \\\n"
+            "  percell-batch-phasor-masks /scratch/dishes/ \\\n"
             "      --channels mNG --t-fit 20.0 --dry-run\n"
-            "  percell4-batch-phasor-masks *.h5 --channels DAPI \\\n"
+            "  percell-batch-phasor-masks *.h5 --channels DAPI \\\n"
             "      --t-mask-a 1.0 --t-mask-b 10.0 --quiet\n"
         ),
     )

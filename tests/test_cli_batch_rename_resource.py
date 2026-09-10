@@ -1,4 +1,4 @@
-"""Tests for the percell4-batch-rename CLI entry point.
+"""Tests for the percell-batch-rename CLI entry point.
 
 Exercises argparse, path resolution, the seam between the CLI and
 batch_rename_resource, and exit codes. The use case itself is
