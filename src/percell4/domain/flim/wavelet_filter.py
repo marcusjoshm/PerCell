@@ -226,7 +226,9 @@ def _filter_channel(data: NDArray, n_levels: int) -> NDArray:
     transformed = anscombe_transform(padded)
 
     # Forward DTCWT — Legall/qshift_a to match ComplexWaveletFilter.py
-    xfm = dtcwt.Transform2d(biort="Legall", qshift="qshift_a")
+    # dtcwt resolves the basis name to a data file (``legall.npz``); the lookup
+    # is case-sensitive on Linux, so the name must be lowercase here.
+    xfm = dtcwt.Transform2d(biort="legall", qshift="qshift_a")
     coeffs = xfm.forward(transformed, nlevels=n_levels)
 
     # Noise estimation
