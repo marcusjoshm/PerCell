@@ -77,7 +77,7 @@ pip install -e ".[dev]"
 Run the app:
 
 ```bash
-percell4-gui
+percell
 # or, from a checkout without installing the package:
 python main.py
 ```
@@ -122,12 +122,12 @@ pip install -e ".[dev]"
 **Run the app:**
 
 ```bash
-percell4-gui
+percell
 # or:
 python main.py
 ```
 
-**Headless / SSH use.** All `percell4-batch*` CLIs run without any display. To launch the GUI over SSH you need X11 forwarding (`ssh -X` or `-Y`) or a virtual framebuffer (`xvfb-run -- percell4-gui`). For other distros, use your package manager's equivalents for `python3.12-venv` and the `libxcb-*` libraries; the rest of the flow is identical.
+**Headless / SSH use.** All `percell-batch*` CLIs run without any display. To launch the GUI over SSH you need X11 forwarding (`ssh -X` or `-Y`) or a virtual framebuffer (`xvfb-run -- percell`). For other distros, use your package manager's equivalents for `python3.12-venv` and the `libxcb-*` libraries; the rest of the flow is identical.
 
 ### Windows
 
@@ -207,7 +207,7 @@ Cellpose segmentation depends on PyTorch. On Windows you need two things that th
 After installation, from the activated environment:
 
 ```bash
-percell4-gui
+percell
 ```
 
 From a checkout without installing the package, you can also run:
@@ -254,7 +254,7 @@ If you have a built wheel (for example `dist/percell4-0.4.0-py3-none-any.whl`; t
 
 ```bash
 pip install path/to/percell4-<version>-py3-none-any.whl
-percell4-gui
+percell
 ```
 
 Build a wheel from the repository:
@@ -320,7 +320,7 @@ Bundled apps are large (scientific stack + napari). GPU/CUDA is not included in 
 - **`py` is not recognized** — Install Python from python.org and enable the launcher, or call `python` using the full path shown by the installer (e.g. `C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe -m venv .venv`).
 - **`pip install` tries to compile C/C++ and fails** — Upgrade build tools: `python -m pip install --upgrade pip setuptools wheel`, then retry. If a package still builds from source, install [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (workload "Desktop development with C++") so wheels that are missing for your platform can compile.
 - **PowerShell won't run `Activate.ps1`** — Use the Command Prompt steps with `activate.bat`, or set execution policy as in the PowerShell section above.
-- **`percell4-gui` is not recognized** — Activate the venv first; the script is `.venv\Scripts\percell4-gui.exe`. You can always run `python main.py` from the repo root with the venv active.
+- **`percell` is not recognized** — Activate the venv first; the script is `.venv\Scripts\percell.exe`. You can always run `python main.py` from the repo root with the venv active.
 - **Qt / napari import errors** — This project pins **PyQt5** and uses **qtpy**. Avoid installing a second Qt binding (e.g. PyQt6) into the same venv unless you know you need it. If both are present and imports break, try: `set QT_API=pyqt5` before launching (`cmd`) or `$env:QT_API="pyqt5"` (`PowerShell`).
 - **`OSError: [WinError 1114] ... c10.dll`** — PyTorch failed to initialize. Most common fixes, in order: (1) install the [MSVC 2015–2022 x64 Redistributable 14.50+](https://aka.ms/vs/17/release/vc_redist.x64.exe) and reboot; (2) reinstall CPU-only torch with `pip install --no-cache-dir --force-reinstall torch --index-url https://download.pytorch.org/whl/cpu`; (3) if you have `torch==2.9.0` specifically, downgrade — `pip install "torch<2.9" --index-url https://download.pytorch.org/whl/cpu` (known regression [pytorch#169429](https://github.com/pytorch/pytorch/issues/169429) with Qt import order). Full triage is in the planning documents on the `development` branch.
 - **Very long clone path** — If installs fail with path-related errors, clone the repo to a short path like `C:\src\percell4` or enable Windows long paths.

@@ -111,7 +111,7 @@ def _print_item_status(
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-phasor",
+        prog="percell-batch-phasor",
         description=(
             "Batch-compute phasor and apply wavelet across one or more "
             ".h5 datasets.\n\n"
@@ -126,10 +126,10 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-phasor dish_1.h5 dish_2.h5\n"
-            "  percell4-batch-phasor /scratch/dishes/ --filter-level 5\n"
-            "  percell4-batch-phasor *.h5 --overwrite --quiet\n"
-            "  percell4-batch-phasor /scratch/dishes/ --remove\n"
+            "  percell-batch-phasor dish_1.h5 dish_2.h5\n"
+            "  percell-batch-phasor /scratch/dishes/ --filter-level 5\n"
+            "  percell-batch-phasor *.h5 --overwrite --quiet\n"
+            "  percell-batch-phasor /scratch/dishes/ --remove\n"
         ),
     )
     parser.add_argument(

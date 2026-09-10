@@ -80,7 +80,7 @@ logger = logging.getLogger(__name__)
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-delete",
+        prog="percell-batch-delete",
         description=(
             "Batch-delete a single channel, mask, segmentation, or FLIM "
             "phasor/wavelet resource across one or more .h5 datasets.\n\n"
@@ -107,15 +107,15 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  percell4-batch-delete dish_1.h5 dish_2.h5 \\\n"
+            "  percell-batch-delete dish_1.h5 dish_2.h5 \\\n"
             "      --kind segmentation --name cellpose_qc\n"
-            "  percell4-batch-delete /scratch/dishes/ \\\n"
+            "  percell-batch-delete /scratch/dishes/ \\\n"
             "      --kind mask --name thresh_488 --dry-run\n"
-            "  percell4-batch-delete *.h5 \\\n"
+            "  percell-batch-delete *.h5 \\\n"
             "      --kind channel --name DAPI --quiet\n"
-            "  percell4-batch-delete *.h5 \\\n"
+            "  percell-batch-delete *.h5 \\\n"
             "      --kind phasor --name mNG --dry-run\n"
-            "  percell4-batch-delete *.h5 \\\n"
+            "  percell-batch-delete *.h5 \\\n"
             "      --kind wavelet --all\n"
         ),
     )

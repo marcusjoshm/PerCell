@@ -176,7 +176,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
         are written by a post-step and are deliberately not rounds themselves,
         so without this they were written to the ``.h5`` and never measured —
         the researcher had to re-run the whole workflow in existing-mask mode
-        to get particle statistics for them. The ``percell4-batch-measure``
+        to get particle statistics for them. The ``percell-batch-measure``
         CLI already measures them; this closes that GUI/CLI gap.
         """
         if not self._config.use_existing_masks:
@@ -333,7 +333,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
         Skips single-timepoint datasets and datasets whose effective
         segmentation is already a tracked layer (auto-detected by U13).
         Also skips a 2D (time-invariant) segmentation — e.g. a whole-field
-        gate from ``percell4-batch-whole-field``: a single 2D label has no
+        gate from ``percell-batch-whole-field``: a single 2D label has no
         per-frame evolution to track, and ``track_one`` would reject it as
         "not a (T, H, W) stack". Per-frame phases broadcast it instead.
         """
@@ -404,7 +404,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
             if existing is not None:
                 self._effective_seg[entry.name] = existing
                 # Optionally QC a pre-existing segmentation (produced by
-                # percell4-batch or picked via segmentation_overrides)
+                # percell-batch or picked via segmentation_overrides)
                 # before thresholding, instead of skipping straight to it.
                 # Gated to:
                 #   - interactive runs only (headless never yields QC);

@@ -10,16 +10,16 @@ saturation, blur, edge removal) so headless runs reproduce interactive tuning.
 Usage:
     python -m percell4.interfaces.cli.batch_process \\
         /data/dish1 /data/dish2 --output-dir /data/h5 --seg-channel mNG
-    percell4-batch-cellpose-laptrack /data/dishes/* --output-dir out/ --no-track
-    percell4-batch-cellpose-laptrack /data/dish1 --output-dir out/ \\
+    percell-batch-cellpose-laptrack /data/dishes/* --output-dir out/ --no-track
+    percell-batch-cellpose-laptrack /data/dish1 --output-dir out/ \\
         --channel-names DAPI,GFP,RFP --seg-channel GFP --seg-name nuclei
     # Re-segment an already-compressed .h5 in place:
-    percell4-batch-cellpose-laptrack /data/h5/dish1.h5 --cellprob-threshold -1.0
+    percell-batch-cellpose-laptrack /data/h5/dish1.h5 --cellprob-threshold -1.0
     # Track-only: re-run laptrack on an existing segmentation, no Cellpose:
-    percell4-batch-cellpose-laptrack /data/h5/movie.h5 \\
+    percell-batch-cellpose-laptrack /data/h5/movie.h5 \\
         --skip-segmentation --seg-name cellpose_88
     # Verbose: surface Cellpose/laptrack native logs + per-frame timing:
-    percell4-batch-cellpose-laptrack /data/h5/movie.h5 --verbose
+    percell-batch-cellpose-laptrack /data/h5/movie.h5 --verbose
 
 Each positional argument is an already-compressed ``.h5`` **file** (the
 compress/import step is skipped), a **directory of ``.h5`` files** (globbed
@@ -131,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     defaults = CellposeSettings()
 
     parser = argparse.ArgumentParser(
-        prog="percell4-batch-cellpose-laptrack",
+        prog="percell-batch-cellpose-laptrack",
         description=(
             "Headless batch compress + Cellpose segment (all timepoints) + "
             "laptrack tracking for multi-timepoint experiments. Each positional "

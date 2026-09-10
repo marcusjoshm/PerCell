@@ -63,7 +63,7 @@ _OUTPUT_TAIL_CAP = 8192
 
 
 class BatchConsolePanel(QWidget):
-    """Command console for running the ``percell4-*`` batch CLI catalog."""
+    """Command console for running the ``percell-*`` batch CLI catalog."""
 
     # The streaming console manages its own scroll — its host (BatchToolsWindow)
     # adds it directly as the central widget rather than wrapping it in a
@@ -116,7 +116,7 @@ class BatchConsolePanel(QWidget):
 
         left_layout.addWidget(self._muted_label("Batch tools"))
         self._catalog = QListWidget()
-        self._catalog.setToolTip("Pick a percell4-* batch tool to compose it.")
+        self._catalog.setToolTip("Pick a percell-* batch tool to compose it.")
         self._catalog.currentItemChanged.connect(self._on_catalog_selected)
         left_layout.addWidget(self._catalog, stretch=2)
 
@@ -131,7 +131,7 @@ class BatchConsolePanel(QWidget):
 
         self._view = AnsiConsoleView()
         self._view.setPlaceholderText(
-            "No output yet — pick a tool or type a percell4-* command. "
+            "No output yet — pick a tool or type a percell-* command. "
             "Add -h to a command to print its help here."
         )
         splitter.addWidget(self._view)
@@ -228,8 +228,8 @@ class BatchConsolePanel(QWidget):
             return
         except UnknownCommandError as exc:
             self._emit(
-                f"[Error] {exc.name!r} is not a percell4-* batch tool — "
-                "pick from the catalog or type a percell4-* command.",
+                f"[Error] {exc.name!r} is not a percell-* batch tool — "
+                "pick from the catalog or type a percell-* command.",
                 _RED,
             )
             return

@@ -1263,7 +1263,7 @@ class DatasetStore:
         array (the full stack for time-lapse, or the 2D array otherwise).
 
         A 2D label on a time-lapse dataset is *time-invariant* (e.g. a
-        whole-field gate written by ``percell4-batch-whole-field``): a
+        whole-field gate written by ``percell-batch-whole-field``): a
         per-timepoint read broadcasts it, returning the same ``(H, W)``
         frame for every ``timepoint``. Without this, per-frame phases
         (threshold / measure) would hit ``read_array_frame``'s

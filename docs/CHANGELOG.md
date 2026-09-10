@@ -10,6 +10,14 @@ the README for the current list.
 
 ## [Unreleased]
 
+### Changed
+
+- **The app and its command-line tools are now called `percell`.** Launch the
+  app with `percell` (was `percell4-gui`); the batch tools are `percell-batch-*`
+  and `percell-inspect` (were `percell4-*`). The old names still work as
+  aliases for one release cycle, so existing scripts keep running; they will be
+  removed in a later release. The Python package name (`percell4`) is unchanged.
+
 ## [0.4.0] — 2026-09-10
 
 PerCell4: a standalone desktop application on HDF5 and pandas, integrating Cellpose,

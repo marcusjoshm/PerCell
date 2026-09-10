@@ -672,7 +672,7 @@ class WorkflowConfig:
     # a separate particles.parquet/csv with per-particle detail.
     particle_settings: ParticleSettings | None = None
     # Whether datasets that arrive ALREADY segmented (e.g. from the
-    # percell4-batch CLI, or an explicit segmentation_overrides pick)
+    # percell-batch CLI, or an explicit segmentation_overrides pick)
     # run the interactive segmentation-QC step on their selected
     # /labels layer before group thresholding. Defaults to True so a
     # batch-produced segmentation gets a review pass by default; set

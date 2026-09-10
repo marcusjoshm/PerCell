@@ -102,9 +102,26 @@ dev = [
 ]
 
 [project.gui-scripts]
+percell = "percell4.app:main"
+# Pre-0.5 name, kept as an alias for one release cycle.
 percell4-gui = "percell4.app:main"
 
 [project.scripts]
+percell-batch-cellpose-laptrack = "percell4.interfaces.cli.batch_process:main"
+percell-batch-export       = "percell4.interfaces.cli.batch_export:main"
+percell-batch-export-phasor = "percell4.interfaces.cli.batch_export_phasor:main"
+percell-batch-rename       = "percell4.interfaces.cli.batch_rename_resource:main"
+percell-batch-delete       = "percell4.interfaces.cli.batch_delete_resource:main"
+percell-batch-describe     = "percell4.interfaces.cli.batch_describe:main"
+percell-batch-phasor       = "percell4.interfaces.cli.batch_phasor:main"
+percell-batch-phasor-masks = "percell4.interfaces.cli.batch_phasor_masks:main"
+percell-batch-whole-field  = "percell4.interfaces.cli.batch_whole_field:main"
+percell-batch-validate-puncta = "percell4.interfaces.cli.batch_validate_puncta:main"
+percell-window-bakeoff     = "percell4.interfaces.cli.window_bakeoff:main"
+percell-batch-threshold    = "percell4.interfaces.cli.batch_threshold:main"
+percell-batch-measure      = "percell4.interfaces.cli.batch_measure:main"
+percell-inspect            = "percell4.interfaces.cli.inspect_dataset:main"
+# Pre-0.5 names, kept as aliases for one release cycle (same targets as above).
 percell4-batch-cellpose-laptrack = "percell4.interfaces.cli.batch_process:main"
 percell4-batch-export       = "percell4.interfaces.cli.batch_export:main"
 percell4-batch-export-phasor = "percell4.interfaces.cli.batch_export_phasor:main"

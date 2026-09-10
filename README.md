@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="art/percell4_logo.png" width="180" alt="PerCell4 logo">
+  <img src="art/percell4_logo.png" width="180" alt="PerCell logo">
 </p>
 
-# PerCell4
+# PerCell
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](docs/installation.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-PerCell4 is a desktop application for single-cell analysis of fluorescence microscopy
+PerCell is a desktop application for single-cell analysis of fluorescence microscopy
 images, including fluorescence lifetime (FLIM) data. It combines Cellpose segmentation,
 per-cell thresholding and puncta detection, per-cell measurement, and phasor analysis in
 one workflow, and stores each experiment as a single HDF5 file. It is written in Python
@@ -16,11 +16,11 @@ and built on Qt, napari, scikit-image and h5py.
 
 Every batch operation is also available as a headless command-line tool.
 
-> PerCell4 is under active development. The current release is 0.4.0 (see
+> PerCell is under active development. The current release is 0.4.0 (see
 > [Versions](#versions)); interfaces and file layouts may still change between versions.
 
 <p align="center">
-  <img src="art/main-window.png" width="900" alt="The PerCell4 launcher, session controls, image viewer, and phasor plot, showing a FLIM phasor histogram against the universal semicircle">
+  <img src="art/main-window.png" width="900" alt="The PerCell launcher, session controls, image viewer, and phasor plot, showing a FLIM phasor histogram against the universal semicircle">
 </p>
 
 ## Documentation
@@ -39,7 +39,7 @@ Every batch operation is also available as a headless command-line tool.
 
 ## Installation
 
-PerCell4 requires Python 3.12 or newer. **Only Python 3.12 is tested** — newer versions
+PerCell requires Python 3.12 or newer. **Only Python 3.12 is tested** — newer versions
 install and run, but are not verified. If you experience problems with a newer version of Python, reinstall with Python 3.12.
 
 ```bash
@@ -56,7 +56,7 @@ extras, PyTorch and Cellpose notes, standalone bundles, and troubleshooting.
 Launch the application:
 
 ```bash
-percell4-gui
+percell
 ```
 
 or
@@ -72,10 +72,10 @@ thresholding, and measurement.
 Batch operations can also be run without a display:
 
 ```bash
-percell4-inspect data/*.h5
-percell4-batch-threshold data/*.h5 --round-name SG_mask --channel mNG \
+percell-inspect data/*.h5
+percell-batch-threshold data/*.h5 --round-name SG_mask --channel mNG \
     --strategy adaptive-clip --d-min-um 1.0
-percell4-batch-measure data/*.h5 --mask SG_mask --output results/
+percell-batch-measure data/*.h5 --mask SG_mask --output results/
 ```
 
 See the [command-line reference](docs/cli.md) for all tools and options.
@@ -106,7 +106,7 @@ repository; they are available here as tags:
 | `v0.1.0` | microscopy-analysis-single-cell (2025) | Command-line workflow for LAS X exports: Cellpose segmentation and per-cell analysis |
 | `v0.2.0` | PerCell (2025–2026) | Cellpose plus ImageJ macros behind an interactive command-line interface |
 | `v0.3.0` | PerCell3 (2026) | Platform built on OME-Zarr and SQLite, with Cellpose and napari |
-| `v0.4.0` | PerCell4 (2026) | This application: a standalone GUI on HDF5 and pandas, and the base of current development |
+| `v0.4.0` | PerCell4 (2026) | This application, now simply PerCell: a standalone GUI on HDF5 and pandas, and the base of current development |
 
 To look at an earlier generation, check out its tag:
 
@@ -122,10 +122,10 @@ placeholder such as `0.0.1.devN`.
 
 ## Reporting issues
 
-PerCell4 is a developing project and reports are greatly appreciated! Questions and bug
+PerCell is a developing project and reports are greatly appreciated! Questions and bug
 reports are welcome in [GitHub issues](https://github.com/marcusjoshm/PerCell/issues).
 Please include your operating system, Python version, and the output of
-`percell4-inspect` for the dataset involved where relevant.
+`percell-inspect` for the dataset involved where relevant.
 
 ## Contributing
 
@@ -140,4 +140,4 @@ a clone of `main` stays about the software rather than about how it was built. S
 
 ## License
 
-PerCell4 is distributed under the MIT License. See [`LICENSE`](LICENSE).
+PerCell is distributed under the MIT License. See [`LICENSE`](LICENSE).

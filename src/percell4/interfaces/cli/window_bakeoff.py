@@ -7,9 +7,9 @@ scored by ``|auto - ideal|`` plus its own mask IoU/recall. ``k`` is pinned for
 the whole run and recorded.
 
 Usage:
-    percell4-window-bakeoff DS.h5 --channel G3BP1 --k 3.0 \\
+    percell-window-bakeoff DS.h5 --channel G3BP1 --k 3.0 \\
         --window-grid 15 31 51 71 91 111 131 --out report.json
-    percell4-window-bakeoff A.h5 B.h5 --channel G3BP1 --cp-name cp_mask \\
+    percell-window-bakeoff A.h5 B.h5 --channel G3BP1 --cp-name cp_mask \\
         --finders otsu-mean granule-size --holdout B --c 4.5
 
 Exit codes:
@@ -87,7 +87,7 @@ def _print_table(report) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="percell4-window-bakeoff",
+        prog="percell-window-bakeoff",
         description="Score auto-window-size finders against the SG-mask oracle.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
