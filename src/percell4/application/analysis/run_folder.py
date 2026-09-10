@@ -46,15 +46,10 @@ def write_analysis_run_config(folder: Path, payload: dict[str, Any]) -> None:
 
 
 def percell4_version() -> str:
-    """Best-effort retrieval of the installed PerCell4 version."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version
+    """The PerCell4 version, from the package's single resolver (never raises)."""
+    from percell4 import __version__
 
-        return version("percell4")
-    except PackageNotFoundError:
-        return "unknown"
-    except Exception:
-        return "unknown"
+    return __version__
 
 
 def _json_default(obj: Any) -> Any:
