@@ -5,7 +5,7 @@ post-step. They are deliberately not rounds, and ``_measure_round_specs_for``
 returned ``config.thresholding_rounds`` verbatim, so they were written to the
 ``.h5`` and never measured — the researcher had to re-run the whole workflow
 in existing-mask mode to get particle statistics for them. The
-``percell4-batch-measure`` CLI already measures them; this closes the gap.
+``percell-batch-measure`` CLI already measures them; this closes the gap.
 
 Specs are derived per dataset from what is actually on disk, because a
 dataset whose classification found a single population writes no ``_high``

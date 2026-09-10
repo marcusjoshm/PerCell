@@ -1,4 +1,4 @@
-"""Tests for the percell4-batch-delete CLI entry point."""
+"""Tests for the percell-batch-delete CLI entry point."""
 
 from __future__ import annotations
 

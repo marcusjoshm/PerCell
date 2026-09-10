@@ -1,4 +1,4 @@
-"""Tests for the percell4-batch-measure CLI (measure + particles + CSV export)."""
+"""Tests for the percell-batch-measure CLI (measure + particles + CSV export)."""
 
 from __future__ import annotations
 

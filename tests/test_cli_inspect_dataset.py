@@ -1,4 +1,4 @@
-"""Tests for the percell4-inspect CLI (dataset metadata + layer inventory)."""
+"""Tests for the percell-inspect CLI (dataset metadata + layer inventory)."""
 
 from __future__ import annotations
 

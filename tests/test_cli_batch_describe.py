@@ -1,4 +1,4 @@
-"""Tests for the percell4-batch-describe CLI entry point.
+"""Tests for the percell-batch-describe CLI entry point.
 
 Exercises argparse (the required verb group), path resolution, the seam
 between the CLI and batch_set_description, and exit codes. The use case is

@@ -1,4 +1,4 @@
-"""Tests for percell4-batch-whole-field CLI."""
+"""Tests for percell-batch-whole-field CLI."""
 
 from __future__ import annotations
 

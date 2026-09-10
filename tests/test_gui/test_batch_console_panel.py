@@ -61,7 +61,7 @@ def test_instantiates_headless_with_defaults(qtbot):
     panel, _ = _panel(qtbot)
     # console starts empty; input seeded with the first catalog tool name
     assert panel._view.toPlainText() == ""
-    assert panel._input.text().startswith("percell4-")
+    assert panel._input.text().startswith("percell-")
 
 
 def test_default_catalog_selection_present(qtbot):
@@ -69,7 +69,7 @@ def test_default_catalog_selection_present(qtbot):
     panel, _ = _panel(qtbot)
     item = panel._catalog.currentItem()
     assert item is not None
-    assert item.data(Qt.UserRole).startswith("percell4-")
+    assert item.data(Qt.UserRole).startswith("percell-")
 
 
 def test_catalog_selection_inserts_tool_name(qtbot):
@@ -91,19 +91,19 @@ def test_unknown_command_shows_error_and_does_not_run(qtbot):
     panel, runner = _panel(qtbot)
     panel._run_line("ls -la")
     assert runner.calls == []
-    assert "not a percell4-* batch tool" in panel._view.toPlainText()
+    assert "not a percell-* batch tool" in panel._view.toPlainText()
 
 
 def test_unbalanced_quote_shows_error_and_does_not_run(qtbot):
     panel, runner = _panel(qtbot)
-    panel._run_line('percell4-inspect "unclosed')
+    panel._run_line('percell-inspect "unclosed')
     assert runner.calls == []
     assert "[Error]" in panel._view.toPlainText()
 
 
 def test_known_command_runs_with_module_argv_and_toggles_buttons(qtbot):
     panel, runner = _panel(qtbot)
-    panel._run_line("percell4-inspect exp.h5")
+    panel._run_line("percell-inspect exp.h5")
 
     assert len(runner.calls) == 1
     argv = runner.calls[0][0]
@@ -126,7 +126,7 @@ def test_set_running_keeps_catalog_and_navigator_enabled(qtbot):
     # A run must not disable the catalog or navigator, and _set_running must not
     # reference any removed widget (regression guard for the old _combo).
     panel, runner = _panel(qtbot)
-    panel._run_line("percell4-inspect exp.h5")
+    panel._run_line("percell-inspect exp.h5")
     assert not panel._run_btn.isEnabled()
     assert panel._cancel_btn.isEnabled()
     assert panel._catalog.isEnabled()
@@ -137,7 +137,7 @@ def test_set_running_keeps_catalog_and_navigator_enabled(qtbot):
 
 def test_cancelled_run_shows_cancelled_and_skips_exit_status(qtbot):
     panel, runner = _panel(qtbot)
-    panel._run_line("percell4-inspect exp.h5")
+    panel._run_line("percell-inspect exp.h5")
     runner.cancel()
     text = panel._view.toPlainText()
     assert "Cancelled" in text
@@ -153,7 +153,7 @@ def test_lock_error_rendered_and_no_reload(qtbot, tmp_path):
         get_open_h5_path=lambda: str(open_h5),
         reload_open_dataset=lambda: reloaded.append(1),
     )
-    panel._run_line(f"percell4-batch-measure {open_h5}")
+    panel._run_line(f"percell-batch-measure {open_h5}")
     runner.output.emit("OSError: [Errno 35] unable to lock file\n")
     runner.emit_finished(1)
     text = panel._view.toPlainText()
@@ -172,7 +172,7 @@ def test_reload_fires_only_on_success_and_reference(qtbot, tmp_path):
         get_open_h5_path=lambda: str(open_h5),
         reload_open_dataset=lambda: reloaded.append(1),
     )
-    panel._run_line(f"percell4-batch-measure {open_h5}")
+    panel._run_line(f"percell-batch-measure {open_h5}")
     runner.emit_finished(0)
     assert reloaded == [1]
 
@@ -183,7 +183,7 @@ def test_reload_fires_only_on_success_and_reference(qtbot, tmp_path):
         get_open_h5_path=lambda: str(open_h5),
         reload_open_dataset=lambda: reloaded2.append(1),
     )
-    panel2._run_line(f"percell4-inspect {other}")
+    panel2._run_line(f"percell-inspect {other}")
     runner2.emit_finished(0)
     assert reloaded2 == []
 

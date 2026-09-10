@@ -42,7 +42,7 @@ def _github_slug(heading_text: str) -> str:
 
     The subtle part, and the reason this is not a one-liner: github-slugger
     replaces *each* space with a hyphen rather than collapsing runs. A heading
-    like ``` `percell4-batch-export` -- TIFF export ``` loses its em-dash to
+    like ``` `percell-batch-export` -- TIFF export ``` loses its em-dash to
     punctuation-stripping and is left with two adjacent spaces, so the real
     anchor carries a *double* hyphen. Collapsing whitespace here would reject
     every correct command anchor in docs/cli.md.
