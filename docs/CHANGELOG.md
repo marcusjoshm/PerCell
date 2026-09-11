@@ -13,8 +13,8 @@ the README for the current list.
 ### Added
 
 - **Paper-strict wavelet filter, with levers.** The FLIM tab's Wavelet
-  Filter group gains a Method picker: *LeeLab reference* (the historical
-  behaviour, unchanged to the bit) or *Paper (Wang 2021 BiShrink)*, a strict
+  Filter group gains a Method picker: *LeeLab* (the historical shrinkage;
+  see the Anscombe correction under Fixed) or *Paper (Wang 2021 BiShrink)*, a strict
   reading of Wang et al., Biomed. Opt. Express 12(6) 3463 and its supplement
   (`docs/reference/`). A *Show algorithm levers* toggle exposes every point
   where the two differ — which bands feed the MAD noise estimate, the power
@@ -28,6 +28,21 @@ the README for the current list.
   cached variant differs from the requested one. `percell4-batch-phasor`
   takes the same choices via `--wavelet-method` and repeatable
   `--wavelet-param KEY=VALUE`.
+
+### Fixed
+
+- **The wavelet filter's Anscombe transform now follows the paper.** The
+  LeeLab reference script clamps negative values *before* adding 3/8, which
+  flattens every negative Fourier coordinate (`G·I` at a noisy pixel) to the
+  same value, and inverts with a sixth-order rational formula that blows up
+  for small reconstructed values. The default (LeeLab) filter now uses the
+  paper's eq. 6 as written — clamp *after* adding 3/8 — and its literal
+  algebraic inverse `(y/2)² − 3/8`. Filtered phasors move by up to ~0.04 at
+  noisy pixels; Apply Wavelet recomputes any cached result stamped with the
+  old settings (or with none). The script's exact behaviour remains
+  reachable by moving the *Anscombe clamp* and *Inverse Anscombe* levers
+  back (`--wavelet-param anscombe_clamp=before --wavelet-param
+  inverse_anscombe=exact` on the command line).
 
 ### Changed
 

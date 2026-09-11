@@ -3,20 +3,25 @@
 One parameterised kernel serves two reference algorithms, selected (and
 tweaked) through :class:`WaveletParams`:
 
-* **LeeLab** (``WaveletParams.leelab()``, the default) — a faithful match
-  to the reference ``ComplexWaveletFilter.py`` (LeeLabBCM):
-  Anscombe → DTCWT (``biort='Legall'``, ``qshift='qshift_a'``) → inter-scale
-  Wiener-like shrinkage → inverse DTCWT → inverse Anscombe, followed by the
-  reference's phasor recovery (divide by filtered intensity, ``nan_to_num``,
-  threshold by *unfiltered* intensity, clip to ``[-0.1, 1.1]``). The math is
-  vectorized with numpy/scipy for ~100x speedup over the reference's nested
-  Python loops, but produces output identical to the reference to float
-  precision (verified against ``dataset_CWFlevels=9.npz``: G ~1e-8, S ~1e-5).
-  Three details are load-bearing for that identity and must not drift from
-  the reference: the Anscombe clamp order (``2√(max(data,0)+3/8)``), the
-  *unclamped* inverse Anscombe (clamping is deferred to ``nan_to_num`` +
-  clip in :func:`denoise_phasor`), and the ``Legall`` biorthogonal basis.
-  ``tests/test_domain/fixtures/wavelet_leelab_golden.npz`` pins this path.
+* **LeeLab** (``WaveletParams.leelab()``, the default) — the reference
+  ``ComplexWaveletFilter.py`` (LeeLabBCM) with its Anscombe pair corrected:
+  Anscombe (the paper's eq. 6, ``2√(max(x+3/8, 0))``) → DTCWT
+  (``biort='Legall'``, ``qshift='qshift_a'``) → the script's inter-scale
+  Wiener-like shrinkage → inverse DTCWT → algebraic inverse Anscombe
+  (``(y/2)² − 3/8``), followed by the script's phasor recovery (divide by
+  filtered intensity, ``nan_to_num``, threshold by *unfiltered* intensity,
+  clip to ``[-0.1, 1.1]``). The script clamps *before* adding 3/8, which
+  flattens every negative Fourier coordinate ``G·I`` at a noisy pixel to
+  the value at zero, and inverts with a sixth-order rational formula that
+  diverges for small reconstructed values; both were replaced (2026-09-11)
+  by the paper's forms, which move the filtered phasor by up to ~0.04.
+  Everything else is the script's math, vectorized with numpy/scipy for
+  ~100x speedup over its nested Python loops.
+  ``WaveletParams.reference_script()`` restores the script's Anscombe pair
+  and reproduces its output to float precision (verified against
+  ``dataset_CWFlevels=9.npz``: G ~1e-8, S ~1e-5); the ``Legall`` basis is
+  load-bearing for that identity.
+  ``tests/test_domain/fixtures/wavelet_leelab_golden.npz`` pins the default.
 
 * **Paper** (``WaveletParams.paper()``) — a strict reading of Wang et al.,
   "Complex wavelet filter improves FLIM phasors for photon starved imaging
@@ -112,15 +117,16 @@ class WaveletParams:
         paper's LeGall 5,3); ``near_sym_a``/``near_sym_b`` are offered for
         comparison. Higher levels always use the 10-tap ``qshift_a``.
     anscombe_clamp
-        ``before``: ``2√(max(x,0)+3/8)`` (LeeLab). ``after``:
-        ``2√(max(x+3/8,0))``, the paper's eq. 6 with a clamp only where the
-        root would be undefined. They differ for every negative ``x``
-        (negative Fourier coordinates ``G·I`` at noisy pixels): ``before``
-        maps all of them to ``2√(3/8)``, ``after`` keeps them down to
-        ``−3/8`` and maps anything below that to 0.
+        ``after``: ``2√(max(x+3/8,0))``, the paper's eq. 6 with a clamp only
+        where the root would be undefined (both presets). ``before``:
+        ``2√(max(x,0)+3/8)``, the LeeLab script. They differ for every
+        negative ``x`` (negative Fourier coordinates ``G·I`` at noisy
+        pixels): ``after`` keeps them down to ``−3/8`` and maps anything
+        below that to 0, ``before`` maps all of them to ``2√(3/8)``.
     inverse_anscombe
-        ``exact``: the sixth-order unbiased rational inverse (LeeLab).
-        ``algebraic``: ``(y/2)² − 3/8``, the literal inverse of eq. 6.
+        ``algebraic``: ``(y/2)² − 3/8``, the literal inverse of eq. 6 (both
+        presets). ``exact``: the sixth-order unbiased rational inverse the
+        LeeLab script uses, which diverges as ``y → 0``.
     shrink_coarsest
         Also shrink the coarsest highpass level (which has no parent, so
         only its own magnitude enters). Both presets leave it untouched,
@@ -134,8 +140,8 @@ class WaveletParams:
     regularize: bool = True
     window_radius: int = 0
     biort: str = "Legall"
-    anscombe_clamp: str = "before"
-    inverse_anscombe: str = "exact"
+    anscombe_clamp: str = "after"
+    inverse_anscombe: str = "algebraic"
     shrink_coarsest: bool = False
 
     def __post_init__(self) -> None:
@@ -160,8 +166,20 @@ class WaveletParams:
 
     @classmethod
     def leelab(cls) -> WaveletParams:
-        """The reference ``ComplexWaveletFilter.py`` behaviour (default)."""
+        """The LeeLab script's shrinkage with the paper's Anscombe pair
+        (default)."""
         return cls()
+
+    @classmethod
+    def reference_script(cls) -> WaveletParams:
+        """The reference ``ComplexWaveletFilter.py`` to the bit: LeeLab
+        with the script's own Anscombe clamp order and rational inverse.
+
+        Not a preset the GUI or CLI offer by name (it is labelled
+        ``custom``); it exists to reproduce the script and to identify
+        caches written before the Anscombe correction.
+        """
+        return cls().with_overrides(anscombe_clamp="before", inverse_anscombe="exact")
 
     @classmethod
     def paper(cls) -> WaveletParams:
@@ -282,15 +300,16 @@ def _coerce(key: str, value: Any, type_name: Any) -> Any:
 # ── Transforms ─────────────────────────────────────────────────
 
 
-def anscombe_transform(data, clamp: str = "before"):
+def anscombe_transform(data, clamp: str = "after"):
     """Anscombe transform to stabilize Poisson noise variance.
 
-    ``clamp="before"`` clamps ``data`` to non-negative *before* adding 3/8,
-    matching ``ComplexWaveletFilter.anscombe_transform`` exactly.
-    ``clamp="after"`` adds 3/8 first and clamps the radicand, which is the
-    paper's eq. 6 as written. They differ for every negative input —
-    negative Fourier coordinates ``G*I`` at noisy pixels — and that
-    difference is enough to perturb the filtered phasor by ~0.02.
+    ``clamp="after"`` (default) adds 3/8 first and clamps the radicand,
+    which is the paper's eq. 6 as written. ``clamp="before"`` clamps
+    ``data`` to non-negative *before* adding 3/8, matching
+    ``ComplexWaveletFilter.anscombe_transform`` exactly. They differ for
+    every negative input — negative Fourier coordinates ``G*I`` at noisy
+    pixels — and that difference alone perturbs the filtered phasor by
+    ~0.02.
     """
     if clamp == "before":
         return 2 * np.sqrt(np.maximum(data, 0) + (3 / 8))
@@ -300,16 +319,18 @@ def anscombe_transform(data, clamp: str = "before"):
     raise AssertionError("unreachable")
 
 
-def reverse_anscombe_transform(y, method: str = "exact"):
+def reverse_anscombe_transform(y, method: str = "algebraic"):
     """Inverse Anscombe transform.
 
-    ``method="exact"`` is the sixth-order rational (unbiased) inverse,
-    faithful to ``ComplexWaveletFilter.reverse_anscombe_transform``: no
-    clamping of ``y`` and no flooring of the result. Small or non-positive
-    reconstructed values therefore yield inf/NaN here, exactly as in the
-    reference; :func:`denoise_phasor` sweeps them up with ``nan_to_num`` +
-    clip during phasor recovery. ``method="algebraic"`` is the literal
-    inverse of the forward transform, ``(y/2)² − 3/8``.
+    ``method="algebraic"`` (default) is the literal inverse of the forward
+    transform, ``(y/2)² − 3/8``; it is finite for every finite ``y`` (a
+    floor of ``−3/8``). ``method="exact"`` is the sixth-order rational
+    (unbiased) inverse, faithful to
+    ``ComplexWaveletFilter.reverse_anscombe_transform``: no clamping of
+    ``y`` and no flooring of the result, so small or non-positive
+    reconstructed values yield inf/NaN, exactly as in the reference;
+    :func:`denoise_phasor` sweeps those up with ``nan_to_num`` + clip
+    during phasor recovery.
     """
     y = np.asarray(y, dtype=np.float64)
     if method == "algebraic":
@@ -501,10 +522,11 @@ def _filter_channel(
     """Apply DTCWT denoising to a single 2D channel.
 
     Anscombe → DTCWT (``params.biort`` / ``qshift_a``) → BiShrink-style
-    shrinkage → inverse DTCWT → inverse Anscombe. With the LeeLab preset
-    this mirrors ``ComplexWaveletFilter.process_files``' per-channel
-    filtering to float precision; the basis matters for that identity
-    (``near_sym_a`` leaves a ~1e-3 residual, ``Legall`` matches).
+    shrinkage → inverse DTCWT → inverse Anscombe. With
+    ``WaveletParams.reference_script()`` this mirrors
+    ``ComplexWaveletFilter.process_files``' per-channel filtering to float
+    precision; the basis matters for that identity (``near_sym_a`` leaves
+    a ~1e-3 residual, ``Legall`` matches).
     """
     import dtcwt
 
@@ -552,7 +574,7 @@ def denoise_phasor(
 
     Filters the Fourier images ``G·I``, ``S·I`` and ``I`` separately, then
     recovers ``G = Gfiltered·I / Ifiltered`` (paper eqs. 3-8) with the
-    reference's recovery (``nan_to_num``, threshold by the *unfiltered*
+    LeeLab script's recovery (``nan_to_num``, threshold by the *unfiltered*
     intensity, clip to ``[-0.1, 1.1]``).
 
     Parameters
@@ -562,7 +584,7 @@ def denoise_phasor(
     intensity : (H, W) total photon counts per pixel
     filter_level : DTCWT decomposition depth (default 9)
     omega : angular frequency in rad/ns (for lifetime calculation, optional)
-    params : which algorithm variant to run; ``None`` = LeeLab reference
+    params : which algorithm variant to run; ``None`` = LeeLab preset
 
     Returns
     -------

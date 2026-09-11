@@ -53,10 +53,11 @@ class CachedPhasorResult:
     ``cached_wavelet_params`` is the algorithm-variant dict ApplyWavelet
     stamped as the ``wavelet_params`` JSON attr (see
     :class:`~percell4.domain.flim.wavelet_filter.WaveletParams`); ``None``
-    when absent — files written before the variant existed were always
-    the LeeLab reference, which the Apply-Wavelet handler assumes for a
-    ``None``. Remaining writer attrs (flim_frequency_mhz) stay unsurfaced
-    — no consumer needs them.
+    when absent — files written before the variant existed were computed
+    by the reference script's Anscombe pair, which the Apply-Wavelet
+    handler treats as no longer matching any preset (so it recomputes).
+    Remaining writer attrs (flim_frequency_mhz) stay unsurfaced — no
+    consumer needs them.
     """
 
     g_map: NDArray[np.float32]

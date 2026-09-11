@@ -180,8 +180,9 @@ def main(argv: list[str] | None = None) -> int:
         choices=("leelab", "paper"),
         default="leelab",
         help=(
-            "Wavelet algorithm preset. 'leelab' (default) matches the "
-            "reference ComplexWaveletFilter.py; 'paper' is the strict "
+            "Wavelet algorithm preset. 'leelab' (default) is the reference "
+            "ComplexWaveletFilter.py shrinkage with the paper's Anscombe "
+            "transform (clamp after +3/8, algebraic inverse); 'paper' is the strict "
             "Wang et al. 2021 BiShrink (MAD from the finest-level ±45° "
             "bands, sigma^2 threshold divided by the local signal std, "
             "7x7 window, no regulariser, algebraic inverse Anscombe)."

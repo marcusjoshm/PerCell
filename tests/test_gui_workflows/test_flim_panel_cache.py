@@ -7,6 +7,7 @@ goes through the existing ComputePhasor / ApplyWavelet use cases.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -14,7 +15,7 @@ import pytest
 
 from percell4.application.session import Session
 from percell4.domain.dataset import DatasetHandle
-from percell4.domain.flim.wavelet_filter import MAX_FILTER_LEVEL
+from percell4.domain.flim.wavelet_filter import MAX_FILTER_LEVEL, WaveletParams
 from percell4.interfaces.gui.task_panels.flim_panel import FlimPanel
 from percell4.model import CellDataModel
 
@@ -59,7 +60,12 @@ def _seed_full_cache(
     repo.arrays[f"phasor/{channel}/s"] = rng.uniform(0.05, 0.5, size=shape).astype(np.float32)
     repo.arrays[f"phasor/{channel}/g_filtered"] = rng.uniform(size=shape).astype(np.float32)
     repo.arrays[f"phasor/{channel}/s_filtered"] = rng.uniform(size=shape).astype(np.float32)
-    repo.attrs[f"phasor/{channel}/g_filtered"] = {"filter_level": filter_level}
+    # Stamped the way ApplyWavelet stamps it: the default (LeeLab) variant.
+    repo.attrs[f"phasor/{channel}/g_filtered"] = {
+        "filter_level": filter_level,
+        "wavelet_method": "leelab",
+        "wavelet_params": json.dumps(WaveletParams.leelab().to_dict()),
+    }
     repo.arrays[f"decay/{channel}"] = rng.uniform(size=(*shape, 16)).astype(np.float32)
 
 
@@ -312,7 +318,6 @@ def _fake_wavelet_result():
 
 
 def test_wavelet_method_defaults_to_leelab_with_levers_hidden(panel):
-    from percell4.domain.flim.wavelet_filter import WaveletParams
 
     assert panel._wavelet_method.currentData() == "leelab"
     assert panel._wavelet_params() == WaveletParams.leelab()
@@ -322,7 +327,6 @@ def test_wavelet_method_defaults_to_leelab_with_levers_hidden(panel):
 
 
 def test_paper_preset_populates_levers(panel):
-    from percell4.domain.flim.wavelet_filter import WaveletParams
 
     panel._wavelet_method.setCurrentIndex(panel._wavelet_method.findData("paper"))
     assert panel._wl_local_variance.currentData() == "divide"
@@ -346,11 +350,51 @@ def test_moving_a_lever_relabels_custom_and_back(panel):
     assert panel._wavelet_method.currentData() == "paper"
 
 
+def test_apply_wavelet_unstamped_cache_recomputes_under_default(panel):
+    """A cache with no wavelet_params attr predates the variants: it was
+    computed by the reference script's Anscombe pair, which the corrected
+    LeeLab preset no longer matches, so the default Apply recomputes."""
+    panel._test_repo.attrs["phasor/ch0/g_filtered"] = {
+        "filter_level": _DEFAULT_WAVELET_LEVEL,
+    }
+    panel._wavelet_level.setValue(_DEFAULT_WAVELET_LEVEL)
+    with patch(
+        "percell4.application.use_cases.apply_wavelet.ApplyWavelet.execute",
+        return_value=_fake_wavelet_result(),
+    ) as mock_wavelet:
+        with patch.object(panel, "_shift_held", return_value=False):
+            panel._on_apply_wavelet()
+
+    mock_wavelet.assert_called_once()
+    assert mock_wavelet.call_args.kwargs["params"] == WaveletParams.leelab()
+
+
+def test_apply_wavelet_reference_script_cache_recomputes_under_default(panel):
+    """A cache stamped with the pre-correction levers (labelled 'leelab'
+    by an older build) must not be served for today's LeeLab preset."""
+    stale = WaveletParams.reference_script().to_dict()
+    stale["method"] = "leelab"
+    panel._test_repo.attrs["phasor/ch0/g_filtered"] = {
+        "filter_level": _DEFAULT_WAVELET_LEVEL,
+        "wavelet_method": "leelab",
+        "wavelet_params": json.dumps(stale),
+    }
+    panel._wavelet_level.setValue(_DEFAULT_WAVELET_LEVEL)
+    with patch(
+        "percell4.application.use_cases.apply_wavelet.ApplyWavelet.execute",
+        return_value=_fake_wavelet_result(),
+    ) as mock_wavelet:
+        with patch.object(panel, "_shift_held", return_value=False):
+            panel._on_apply_wavelet()
+
+    mock_wavelet.assert_called_once()
+    assert mock_wavelet.call_args.kwargs["params"] == WaveletParams.leelab()
+
+
 def test_apply_wavelet_paper_method_recomputes_over_leelab_cache(panel):
-    """The seeded cache has no wavelet_params attr (= LeeLab). Asking for
-    the paper variant at the same level must recompute, passing the
-    paper params to the use case."""
-    from percell4.domain.flim.wavelet_filter import WaveletParams
+    """The seeded cache is stamped LeeLab. Asking for the paper variant at
+    the same level must recompute, passing the paper params to the use
+    case."""
 
     panel._wavelet_level.setValue(_DEFAULT_WAVELET_LEVEL)
     panel._wavelet_method.setCurrentIndex(panel._wavelet_method.findData("paper"))
@@ -368,9 +412,7 @@ def test_apply_wavelet_paper_method_recomputes_over_leelab_cache(panel):
 
 def test_apply_wavelet_matching_paper_cache_is_served(panel):
     """Cache stamped with the paper variant + panel set to paper → cache hit."""
-    import json
 
-    from percell4.domain.flim.wavelet_filter import WaveletParams
 
     panel._test_repo.attrs["phasor/ch0/g_filtered"] = {
         "filter_level": _DEFAULT_WAVELET_LEVEL,
@@ -390,9 +432,7 @@ def test_apply_wavelet_matching_paper_cache_is_served(panel):
 
 
 def test_apply_wavelet_leelab_over_paper_cache_recomputes(panel):
-    import json
 
-    from percell4.domain.flim.wavelet_filter import WaveletParams
 
     panel._test_repo.attrs["phasor/ch0/g_filtered"] = {
         "filter_level": _DEFAULT_WAVELET_LEVEL,
@@ -429,7 +469,6 @@ def test_apply_wavelet_corrupt_params_attr_recomputes(panel):
 
 
 def json_dumps_bad() -> str:
-    import json
 
     return json.dumps({"noise_bands": "not-a-real-choice"})
 
@@ -440,7 +479,6 @@ def test_custom_levers_matching_a_preset_hit_that_presets_cache(panel):
     panel._wavelet_method.setCurrentIndex(panel._wavelet_method.findData("paper"))
     panel._wavelet_method.setCurrentIndex(panel._wavelet_method.findData("custom"))
     # Custom keeps the paper levers; hand-set them back to LeeLab's values.
-    from percell4.domain.flim.wavelet_filter import WaveletParams
 
     panel._set_wavelet_levers(WaveletParams.leelab())
     panel._on_wavelet_lever_changed()

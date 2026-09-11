@@ -36,7 +36,7 @@ class ApplyWavelet:
     Reads unfiltered phasor G/S + intensity from the repository,
     runs wavelet denoising, writes filtered results.
 
-    The algorithm variant (LeeLab reference, strict paper BiShrink, or a
+    The algorithm variant (LeeLab preset, strict paper BiShrink, or a
     custom mix of their levers) is a :class:`WaveletParams`; it is stamped
     on ``g_filtered`` / ``s_filtered`` as the ``wavelet_method`` and
     ``wavelet_params`` (JSON) attrs next to ``filter_level`` so the cache
@@ -72,7 +72,7 @@ class ApplyWavelet:
         (mean_bin for /phasor/*, sum_bin_decay for /decay/*).
 
         ``params`` selects the algorithm variant; ``None`` is the LeeLab
-        reference (the historical behaviour).
+        preset.
         """
         params = params or WaveletParams.leelab()
         handle = self._session.dataset

@@ -181,16 +181,18 @@ class FlimPanel(QWidget):
         level_row.addWidget(self._wavelet_level)
         wavelet_layout.addLayout(level_row)
 
-        # Algorithm variant: the LeeLab reference script, a strict reading
-        # of Wang et al. 2021 (BiShrink), or a custom mix of their levers.
+        # Algorithm variant: the LeeLab script (with the paper's Anscombe
+        # pair), a strict reading of Wang et al. 2021 (BiShrink), or a
+        # custom mix of their levers.
         method_row = QHBoxLayout()
         method_row.addWidget(QLabel("Method:"))
         self._wavelet_method = QComboBox()
-        self._wavelet_method.addItem("LeeLab reference", "leelab")
+        self._wavelet_method.addItem("LeeLab", "leelab")
         self._wavelet_method.addItem("Paper (Wang 2021 BiShrink)", "paper")
         self._wavelet_method.addItem("Custom", "custom")
         self._wavelet_method.setToolTip(
-            "LeeLab: matches the reference ComplexWaveletFilter.py exactly.\n"
+            "LeeLab: the reference ComplexWaveletFilter.py shrinkage with the\n"
+            "paper's Anscombe transform (clamp after +3/8, algebraic inverse).\n"
             "Paper: Sendur & Selesnick BiShrink as described in Wang et al.,\n"
             "Biomed. Opt. Express 12(6) 3463 (2021) and its supplement.\n"
             "Custom: any lever below moved off a preset."
@@ -739,14 +741,15 @@ class FlimPanel(QWidget):
         self._wl_anscombe_clamp = combo(
             "Anscombe clamp:",
             [("Clamp before +3/8", "before"), ("Clamp after +3/8", "after")],
-            "Before: 2√(max(x,0)+3/8) (LeeLab). After: 2√(max(x+3/8,0)),\n"
-            "the paper's eq. 6. They differ wherever G·I or S·I is negative.",
+            "After: 2√(max(x+3/8,0)), the paper's eq. 6 (both presets).\n"
+            "Before: 2√(max(x,0)+3/8), the LeeLab script's order.\n"
+            "They differ wherever G·I or S·I is negative.",
         )
         self._wl_inverse_anscombe = combo(
             "Inverse Anscombe:",
             [("Exact unbiased", "exact"), ("Algebraic (y/2)²−3/8", "algebraic")],
-            "Exact: sixth-order unbiased rational inverse (LeeLab).\n"
-            "Algebraic: the literal inverse of the forward transform.",
+            "Algebraic: the literal inverse of the forward transform (both\n"
+            "presets). Exact: the LeeLab script's sixth-order rational inverse.",
         )
 
         self._wl_shrink_coarsest = QCheckBox("Shrink coarsest level too")
@@ -844,7 +847,9 @@ class FlimPanel(QWidget):
         # falls through and recomputes, overwriting the stale result.
         # Without this gate, changing the Filter Level spinbox or the
         # Method would silently no-op against the cache. A cache with no
-        # wavelet_params attr predates the variants and was LeeLab.
+        # wavelet_params attr predates the variants and was computed by the
+        # reference script (the pre-correction Anscombe pair), which no
+        # preset matches, so it is recomputed.
         if not self._shift_held():
             try:
                 from percell4.application.use_cases.load_cached_phasor import (
@@ -994,13 +999,15 @@ class FlimPanel(QWidget):
     ) -> bool:
         """Does a cached ``wavelet_params`` attr describe ``requested``?
 
-        ``None`` (a file written before variants existed) means LeeLab.
-        An unparseable attr never matches, so the cache is recomputed.
+        ``None`` (a file written before variants existed) means the
+        reference script's Anscombe pair, which no preset matches since
+        the LeeLab correction. An unparseable attr never matches. Either
+        way the cache is recomputed.
         """
         try:
             cached_params = (
                 WaveletParams.from_dict(cached) if cached
-                else WaveletParams.leelab()
+                else WaveletParams.reference_script()
             )
         except (ValueError, TypeError):
             return False

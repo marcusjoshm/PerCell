@@ -168,8 +168,8 @@ def batch_compute_phasor(
             missing these are reported as skipped, not as failures.
         filter_level: Wavelet filter level (1..MAX_FILTER_LEVEL). Same
             value applied to every channel of every dataset.
-        wavelet_params: Algorithm variant (LeeLab reference, strict paper
-            BiShrink, or custom levers). ``None`` = LeeLab reference.
+        wavelet_params: Algorithm variant (LeeLab preset, strict paper
+            BiShrink, or custom levers). ``None`` = LeeLab preset.
         overwrite: If False (default), channels with an existing
             ``/phasor/<ch>/g`` are skipped. If True, recompute and
             overwrite. ``ComputePhasor`` itself already invalidates

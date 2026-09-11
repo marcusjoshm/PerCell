@@ -1,9 +1,10 @@
 """Domain tests for the parameterised DTCWT wavelet filter.
 
-Two guarantees: the LeeLab preset still reproduces the reference output
-bit-for-bit (pinned by ``fixtures/wavelet_leelab_golden.npz``, captured
-from the pre-parameterisation code), and the paper preset implements the
-BiShrink rule from Wang et al. 2021's supplement (eqs. 1-3).
+Two guarantees: the LeeLab preset is pinned bit-for-bit by
+``fixtures/wavelet_leelab_golden.npz`` (regenerated 2026-09-11 when the
+preset adopted the paper's Anscombe pair; the pre-correction reference
+script is ``WaveletParams.reference_script()``), and the paper preset
+implements the BiShrink rule from Wang et al. 2021's supplement (eqs. 1-3).
 """
 
 from __future__ import annotations
@@ -35,6 +36,19 @@ def golden():
 def test_default_params_is_leelab_preset():
     assert WaveletParams() == WaveletParams.leelab()
     assert WaveletParams().method == "leelab"
+    # The LeeLab preset uses the paper's Anscombe pair, not the script's.
+    assert WaveletParams().anscombe_clamp == "after"
+    assert WaveletParams().inverse_anscombe == "algebraic"
+
+
+def test_reference_script_is_leelab_with_the_scripts_anscombe_pair():
+    ref = WaveletParams.reference_script()
+    assert ref.method == "custom"
+    assert ref.anscombe_clamp == "before"
+    assert ref.inverse_anscombe == "exact"
+    assert ref.with_overrides(
+        anscombe_clamp="after", inverse_anscombe="algebraic"
+    ) == WaveletParams.leelab()
 
 
 def test_paper_preset_matches_supplement():
@@ -115,7 +129,7 @@ def test_inverse_anscombe_algebraic_inverts_forward_exactly():
 
 
 def test_inverse_anscombe_exact_is_unbiased_at_large_counts():
-    y = wf.anscombe_transform(np.array([500.0]))
+    y = wf.anscombe_transform(np.array([500.0]), clamp="before")
     exact = wf.reverse_anscombe_transform(y, method="exact")
     assert exact[0] == pytest.approx(500.0, rel=1e-3)
 
@@ -239,6 +253,23 @@ def test_explicit_leelab_params_equals_default(golden):
     np.testing.assert_array_equal(a["G"], b["G"])
 
 
+def test_reference_script_differs_from_leelab_where_gi_is_negative(golden):
+    """The script's Anscombe pair is what the LeeLab correction replaced:
+    with negative G·I present, the two disagree; the script's output stays
+    reachable through ``reference_script()``."""
+    kw = dict(filter_level=int(golden["filter_level"]))
+    g = golden["g"].copy()
+    g[::5, ::7] = -0.3
+    ref = denoise_phasor(
+        g, golden["s"], golden["intensity"],
+        params=WaveletParams.reference_script(), **kw,
+    )
+    lee = denoise_phasor(g, golden["s"], golden["intensity"], **kw)
+    assert ref["params"]["method"] == "custom"
+    assert np.isfinite(ref["G"]).all() and np.isfinite(lee["G"]).all()
+    assert not np.array_equal(ref["G"], lee["G"])
+
+
 def test_paper_preset_runs_and_differs_from_leelab(golden):
     kw = dict(filter_level=int(golden["filter_level"]), omega=float(golden["omega"]))
     res = denoise_phasor(
@@ -268,8 +299,8 @@ def test_paper_preset_runs_and_differs_from_leelab(golden):
         # it merely asks whether any energy is nearby), so test it there.
         ("paper", "window_radius", 6),
         ("leelab", "biort", "near_sym_a"),
-        ("leelab", "anscombe_clamp", "after"),
-        ("leelab", "inverse_anscombe", "algebraic"),
+        ("leelab", "anscombe_clamp", "before"),
+        ("leelab", "inverse_anscombe", "exact"),
         ("leelab", "shrink_coarsest", True),
     ],
 )
