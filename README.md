@@ -16,7 +16,7 @@ and built on Qt, napari, scikit-image and h5py.
 
 Every batch operation is also available as a headless command-line tool.
 
-> PerCell is under active development. The current release is 0.4.0 (see
+> PerCell is under active development. The current release is 0.4.1 (see
 > [Versions](#versions)); interfaces and file layouts may still change between versions.
 
 <p align="center">
@@ -115,7 +115,7 @@ git checkout v0.2.0
 ```
 
 The version the package reports comes from the nearest tag in the checkout's history:
-`0.4.0` at the tag, `0.4.1.devN` on later commits. After a new tag, refresh an editable
+`0.4.1` at the tag, `0.4.2.devN` on later commits. After a new tag, refresh an editable
 install with `pip install -e .` so the reported version follows. The `development` branch
 is a testing branch with no version tag in its history, so installs from it report a
 placeholder such as `0.0.1.devN`.

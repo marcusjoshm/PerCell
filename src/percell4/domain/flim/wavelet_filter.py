@@ -1,18 +1,23 @@
 """DTCWT-based wavelet filtering for FLIM phasor data.
 
-Faithful match to the reference ``ComplexWaveletFilter.py`` (LeeLabBCM):
-Anscombe → DTCWT (``biort='Legall'``, ``qshift='qshift_a'``) → inter-scale
-Wiener-like shrinkage → inverse DTCWT → inverse Anscombe, followed by the
-reference's phasor recovery (divide by filtered intensity, ``nan_to_num``,
-threshold by *unfiltered* intensity, clip to ``[-0.1, 1.1]``). The math is
-vectorized with numpy/scipy for ~100x speedup over the reference's nested
-Python loops, but produces output identical to the reference to float
-precision (verified against ``dataset_CWFlevels=9.npz``: G ~1e-8, S ~1e-5).
+The reference ``ComplexWaveletFilter.py`` (LeeLabBCM) with its Anscombe
+pair corrected: Anscombe (Wang et al. 2021 eq. 6, ``2√(max(x+3/8, 0))``) →
+DTCWT (``biort='Legall'``, ``qshift='qshift_a'``) → the script's inter-scale
+Wiener-like shrinkage → inverse DTCWT → algebraic inverse Anscombe
+(``(y/2)² − 3/8``), followed by the script's phasor recovery (divide by
+filtered intensity, ``nan_to_num``, threshold by *unfiltered* intensity,
+clip to ``[-0.1, 1.1]``). The math is vectorized with numpy/scipy for ~100x
+speedup over the reference's nested Python loops.
 
-Three details are load-bearing for that identity and must not drift from
-the reference: the Anscombe clamp order (``2√(max(data,0)+3/8)``), the
-*unclamped* inverse Anscombe (clamping is deferred to ``nan_to_num`` +
-clip in :func:`denoise_phasor`), and the ``Legall`` biorthogonal basis.
+The script clamps *before* adding 3/8, which flattens every negative Fourier
+coordinate ``G·I`` at a noisy pixel to the value at zero, and inverts with a
+sixth-order rational formula that diverges for small reconstructed values.
+Both were replaced (2026-09-11, v0.4.1) by the paper's forms, which move the
+filtered phasor by up to ~0.04 at noisy pixels. With the script's Anscombe
+pair in place the module reproduced the script to float precision (verified
+against ``dataset_CWFlevels=9.npz``: G ~1e-8, S ~1e-5); the ``Legall``
+biorthogonal basis is load-bearing for that identity and still is for
+agreement with the ``development`` branch's LeeLab preset.
 
 Requires the optional ``dtcwt`` package: ``pip install dtcwt>=0.14.0``
 """
@@ -38,35 +43,30 @@ MAX_FILTER_LEVEL = 30
 def anscombe_transform(data):
     """Anscombe transform to stabilize Poisson noise variance.
 
-    Clamps ``data`` to non-negative *before* adding 3/8, matching
-    ``ComplexWaveletFilter.anscombe_transform`` exactly. (Adding 3/8 first
-    and clamping after differs only for ``data < -3/8`` — negative
-    Fourier coordinates ``G*I`` at noisy pixels — but that difference is
-    enough to perturb the filtered phasor by ~0.02, so the order matters.)
+    Wang et al. 2021 eq. 6 as written: add 3/8 first, then clamp the
+    radicand where the root would be undefined (``data < -3/8``). The
+    reference ``ComplexWaveletFilter.anscombe_transform`` clamps ``data``
+    to non-negative *before* adding 3/8 instead, which maps every negative
+    input — negative Fourier coordinates ``G*I`` at noisy pixels — to
+    ``2√(3/8)``; that difference alone perturbs the filtered phasor by
+    ~0.02, so the order matters.
     """
-    return 2 * np.sqrt(np.maximum(data, 0) + (3 / 8))
+    return 2 * np.sqrt(np.maximum(data + (3 / 8), 0))
 
 
 def reverse_anscombe_transform(y):
-    """Inverse Anscombe transform (sixth-order rational approximation).
+    """Inverse Anscombe transform: the literal inverse of the forward
+    transform, ``(y/2)² − 3/8``.
 
-    Faithful to ``ComplexWaveletFilter.reverse_anscombe_transform``: no
-    clamping of ``y`` and no flooring of the result. Small or non-positive
-    reconstructed values therefore yield inf/NaN here, exactly as in the
-    reference; :func:`denoise_phasor` sweeps them up with ``nan_to_num`` +
-    clip during phasor recovery (mirroring the reference's
-    ``process_files``). ``errstate`` only silences the divide/invalid
-    warnings — it does not alter the produced values.
+    Finite for every finite ``y`` (floored at ``−3/8``). The reference
+    ``ComplexWaveletFilter.reverse_anscombe_transform`` uses a sixth-order
+    rational (unbiased) inverse instead, which diverges as ``y → 0`` and
+    left inf/NaN for :func:`denoise_phasor`'s ``nan_to_num`` + clip to
+    sweep up; that sweep is kept for the non-positive filtered
+    intensities that can still arise from the division.
     """
     y = np.asarray(y, dtype=np.float64)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return (
-            (y**2 / 4)
-            + (np.sqrt(3 / 2) * (1 / y) / 4)
-            - (11 / (8 * y**2))
-            + (np.sqrt(5 / 2) * (1 / y**3) / 8)
-            - (1 / (8 * y**4))
-        )
+    return (y / 2.0) ** 2 - (3 / 8)
 
 
 # ── Noise estimation (vectorized) ─────────────────────────────
@@ -207,7 +207,8 @@ def _filter_channel(data: NDArray, n_levels: int) -> NDArray:
     """Apply DTCWT denoising to a single 2D channel.
 
     Mirrors ``ComplexWaveletFilter.process_files``' per-channel filtering
-    with vectorized numpy operations:
+    with vectorized numpy operations, except for the Anscombe pair (see
+    the module docstring):
     Anscombe → DTCWT (``biort='Legall'``) → inter-scale Wiener shrinkage →
     inverse DTCWT → inverse Anscombe. The basis matters: with the
     reference Anscombe transforms in place, ``near_sym_a`` leaves a ~1e-3

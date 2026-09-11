@@ -10,6 +10,21 @@ the README for the current list.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-11
+
+### Fixed
+
+- **The wavelet filter's Anscombe transform now follows the paper.** The
+  LeeLab reference script clamps negative values *before* adding 3/8, which
+  flattens every negative Fourier coordinate (`G·I` at a noisy pixel) to the
+  same value, and inverts with a sixth-order rational formula that blows up
+  for small reconstructed values. The filter now uses Wang et al. 2021's
+  eq. 6 as written — clamp *after* adding 3/8 — and its literal algebraic
+  inverse `(y/2)² − 3/8`. Filtered phasors move by up to ~0.04 at noisy
+  pixels. Wavelet results cached in a dataset by an earlier version are not
+  recomputed automatically: hold Shift while clicking *Apply Wavelet Filter*
+  (or rerun `percell-batch-phasor`) to refresh them.
+
 ### Changed
 
 - **The app and its command-line tools are now called `percell`.** Launch the
