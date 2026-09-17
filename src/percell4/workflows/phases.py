@@ -1949,6 +1949,12 @@ def _append_synthetic_row(
     synthetic["is_edge_synthetic"] = True
 
     df_out = pd.concat([df, pd.DataFrame([synthetic])], ignore_index=True)
+    # The bare ``-1`` ints upcast label / cell_id to int64 in the concat, while
+    # a dataset with no edge cells (early return above) keeps int32 — and
+    # export_run cannot unify staging parquets whose dtypes differ.
+    for col in ("label", "cell_id"):
+        if col in df.columns:
+            df_out[col] = df_out[col].astype(df[col].dtype)
     return (
         df_out,
         None,
@@ -2632,7 +2638,12 @@ def export_run(
         # schema from the FIRST fragment and silently drops columns the
         # other fragments add. Unify all fragment schemas first (missing
         # columns become null) so no dataset's measurements are lost.
-        unified = pa.unify_schemas([pq.read_schema(str(p)) for p in staging_files])
+        # Permissive promotion widens a column whose dtype drifted between
+        # datasets (int32 vs int64) instead of failing the whole export.
+        unified = pa.unify_schemas(
+            [pq.read_schema(str(p)) for p in staging_files],
+            promote_options="permissive",
+        )
         ds = pa_ds.dataset(
             [str(p) for p in staging_files], format="parquet", schema=unified
         )
