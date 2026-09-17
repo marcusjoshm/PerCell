@@ -1649,6 +1649,10 @@ def test_measure_one_appends_synthetic_row_in_size_normalized_mode(
     s = synthetic.iloc[0]
     assert s["cell_id"] == -1
     assert s["label"] == -1
+    # The appended row must not upcast the identity columns: a dataset with no
+    # edge cells keeps int32, and export_run has to unify the two schemas.
+    assert df["label"].dtype == np.int32
+    assert df["cell_id"].dtype == np.int32
     assert bool(s["is_edge"]) is False
     # 6 real edge cells + 6 real whole cells (no synthetic counted)
     assert df["is_edge"].sum() == 6
@@ -1883,6 +1887,59 @@ def test_export_run_writes_parquet_and_csvs(tmp_path, fixture_store_with_labels)
 
     # staging/ was cleaned up
     assert not (run_folder / "staging").exists()
+
+
+def test_export_run_mixes_datasets_with_and_without_edge_cells(
+    tmp_path, fixture_store_with_labels, fixture_store_with_edge_cells
+):
+    """A size-normalized-cohort batch where only some datasets have edge cells
+    (so only some get the synthetic row) still exports as one table."""
+    from percell4.workflows.models import EdgeMode
+
+    run_folder = tmp_path / "run_01"
+    (run_folder / "per_dataset").mkdir(parents=True)
+
+    for name, store in (
+        ("no_edge", fixture_store_with_labels),
+        ("with_edge", fixture_store_with_edge_cells),
+    ):
+        df, failure, _ = measure_one(
+            store,
+            round_specs=[],
+            edge_mode=EdgeMode.INCLUDE_AS_SIZE_NORMALIZED_COHORT,
+        )
+        assert failure is None
+        write_staging_parquet(run_folder, name, df)
+
+    cfg = _sample_workflow_config(selected_cols=["GFP_mean_intensity"])
+    failure, msg = export_run(run_folder, cfg, _sample_run_metadata(run_folder))
+    assert failure is None, msg
+
+    loaded = pd.read_parquet(run_folder / "measurements.parquet")
+    # 12 interior cells + (12 cells + 1 synthetic row)
+    assert len(loaded) == 25
+    assert loaded["is_edge_synthetic"].sum() == 1
+    assert loaded.loc[loaded["is_edge_synthetic"], "dataset"].tolist() == ["with_edge"]
+
+
+def test_export_run_widens_drifted_integer_dtypes(tmp_path):
+    """Staging parquets that disagree on an integer width (int32 vs int64)
+    are widened rather than failing the whole export."""
+    run_folder = tmp_path / "run_01"
+    (run_folder / "per_dataset").mkdir(parents=True)
+
+    for name, dtype in (("A", np.int32), ("B", np.int64)):
+        labels = np.array([1, 2], dtype=dtype)
+        df = pd.DataFrame({"label": labels, "cell_id": labels, "area": [10.0, 12.0]})
+        write_staging_parquet(run_folder, name, df)
+
+    cfg = _sample_workflow_config(selected_cols=["area"])
+    failure, msg = export_run(run_folder, cfg, _sample_run_metadata(run_folder))
+    assert failure is None, msg
+
+    loaded = pd.read_parquet(run_folder / "measurements.parquet")
+    assert len(loaded) == 4
+    assert sorted(loaded["label"].tolist()) == [1, 1, 2, 2]
 
 
 def test_export_run_ignores_appledouble_staging_sidecars(
