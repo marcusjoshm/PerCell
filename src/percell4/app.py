@@ -37,6 +37,11 @@ def _make_splash() -> QSplashScreen:
 
 def main() -> None:
     """Launch the PerCell4 GUI application."""
+    # A frozen app must hand spawned children (the Bio-Formats reader, the
+    # parallel HDF5 decoders) to their worker instead of relaunching the GUI.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     app = QApplication.instance() or QApplication(sys.argv)
 
     # Linux: match PyOpenGL's GL backend to the one Qt just committed to,
@@ -88,4 +93,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     main()

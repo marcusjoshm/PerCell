@@ -53,6 +53,11 @@ _hidden = collect_submodules("percell4") + [
     "h5py",
     "tifffile",
     "sdtfile",
+    # In-file import (optional [bioformats] extra). JPype ships its own
+    # PyInstaller hook for its internal jar; Java and the Bio-Formats jar are
+    # downloaded at first use, never bundled.
+    "jpype",
+    "cjdk",
     "skimage",
     "skimage.measure",
     "skimage.filters",

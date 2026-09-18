@@ -12,6 +12,22 @@ the README for the current list.
 
 ### Added
 
+- **In-file import of multi-dimensional files (September 2026).** *Import
+  Dataset* accepts a folder or individual files, reads their headers without
+  decoding pixels, and suggests a discovery mode. The new **In-file** mode
+  reads files whose channels, z-series and time points live inside one file
+  (ImageJ hyperstacks, OME-TIFF and the vendor formats Bio-Formats supports)
+  and shows a review table: one row per file series, with per-channel
+  checkboxes, a Z/T axis swap, and a *Confirm axes* step for files whose axes
+  are ambiguous. Z is projected at import (max, mean or sum); the dataset
+  records `pixel_size_um`, `z_spacing_um`, `z_projection` and the source
+  series, and `percell-inspect` shows them. The new `percell-import` command
+  does the same headlessly and can write the suggested scheme to a JSON file,
+  edit-and-replay style. Single-cell workflows accept in-file datasets.
+  Bio-Formats needs Java; PerCell downloads a Java runtime and the pinned
+  Bio-Formats 8.5.0 jar into its cache only after you agree (optional
+  `bioformats` extra; see the installation guide).
+
 - **Paper-strict wavelet filter, with levers.** The FLIM tab's Wavelet
   Filter group gains a Method picker: *LeeLab* (the historical shrinkage;
   see the Anscombe correction under Fixed) or *Paper (Wang 2021 BiShrink)*, a strict
@@ -30,6 +46,14 @@ the README for the current list.
   `--wavelet-param KEY=VALUE`.
 
 ### Fixed
+
+- **Multi-plane TIFFs are no longer mis-imported by the token modes.** A
+  hyperstack picked up by Subdirectory, Flat or Tokenless discovery used to be
+  stored as one flat channel with no pixel size. Those modes now leave such
+  files out, with the reason "multi-plane file, import with In-file mode".
+- **The broken "none" Z-projection choice is gone.** It raised inside the
+  importer; every import now projects Z. A saved workflow plan that still
+  asks for "none" fails with a message naming the field.
 
 - **The wavelet filter's Anscombe transform now follows the paper.** The
   LeeLab reference script clamps negative values *before* adding 3/8, which

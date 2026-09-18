@@ -15,6 +15,7 @@ detail. Each OS has its own subsection below; pick yours and stop reading the ot
 - [Updating](#updating)
 - [Install from a wheel](#install-from-a-wheel)
 - [Optional extras](#optional-extras)
+  - [Bio-Formats (in-file import)](#bio-formats-in-file-import)
 - [Standalone bundle (PyInstaller)](#standalone-bundle-pyinstaller)
 - [Troubleshooting](#troubleshooting)
   - [Windows](#windows-1)
@@ -275,8 +276,9 @@ Wheels appear under `dist/`.
 | `gpu`   | GPU-accelerated Cellpose (`cellpose[gpu]`) — pulls CUDA-tagged torch; requires a matching NVIDIA driver. Unsupported on Windows lab machines without a GPU. On Windows, if `nvidia-smi` reports a driver older than R527 (max CUDA < 12.1), install torch from the CUDA 11.8 index explicitly: `pip install --no-cache-dir --force-reinstall "torch<2.9" "torchvision<0.24" --index-url https://download.pytorch.org/whl/cu118`. Current drivers (R560+) work with default `cu126` wheels. |
 | `flim`  | Additional FLIM-related dependency (`dtcwt`) |
 | `imagej`| ROI I/O via `roifile`                        |
+| `bioformats` | In-file import of multi-dimensional files (ImageJ hyperstacks, OME-TIFF, vendor formats) through Bio-Formats: `jpype1`, `cjdk`. **Also needs Java and the Bio-Formats jar**, which PerCell downloads on first use with your consent (see below). |
 | `ocr`   | Phasor-calibration OCR helper [`tools/png_to_csv/`](../tools/png_to_csv/README.md): `pytesseract`, `Pillow`, `openpyxl`. **Also needs the Tesseract OCR engine** — a system binary pip cannot install (see below). |
-| `all`   | `gpu`, `flim`, `imagej`, and `ocr`           |
+| `all`   | `gpu`, `flim`, `imagej`, `bioformats`, and `ocr` |
 
 Example:
 
@@ -294,6 +296,25 @@ pip install -e ".[ocr]"          # python deps for tools/png_to_csv/
 #   Linux:   sudo apt install tesseract-ocr
 #   Windows: https://github.com/UB-Mannheim/tesseract/wiki  (add it to PATH)
 ```
+
+### Bio-Formats (in-file import)
+
+The **In-file** mode of *Import Dataset* and the [`percell-import`](cli.md#percell-import--import-multi-dimensional-files-through-bio-formats) command read files whose channels, z-series and time points live inside one file. They use [Bio-Formats](https://www.openmicroscopy.org/bio-formats/), a Java library, which runs in a separate PerCell process.
+
+```bash
+pip install -e ".[bioformats]"
+```
+
+Java and the Bio-Formats jar are not Python packages. PerCell looks for Java in this order: the `java_home` advanced setting, then `JAVA_HOME`, then its own cache. When none works, the first in-file import shows what it would download and asks first:
+
+- a Java runtime (Temurin 21 JRE, about 48 MB), and
+- `bioformats_package.jar` 8.5.0 (about 54 MB) from the Open Microscopy Environment download site.
+
+Both are checked against pinned SHA-256 checksums and stored in PerCell's per-user cache: `~/Library/Caches/PerCell4` on macOS, `$XDG_CACHE_HOME/percell4` (usually `~/.cache/percell4`) on Linux, and `%LOCALAPPDATA%\PerCell4\Cache` on Windows. Nothing is written next to your data. Headless, `percell-import --provision-java` does the same download; without that flag the command never downloads anything. The standalone bundle below downloads them the same way; it does not ship them.
+
+**Offline machines.** Install any Java 11 or later and choose *Use an existing Java…* in the setup dialog (or set `java_home` in the advanced settings), and place `bioformats_package.jar` 8.5.0 at `<cache>/bioformats/8.5.0/bioformats_package.jar`.
+
+**Licence.** PerCell is MIT-licensed. `bioformats_package.jar` is GPL-licensed software from the Open Microscopy Environment; PerCell downloads it to your computer on request and does not redistribute it.
 
 ---
 
