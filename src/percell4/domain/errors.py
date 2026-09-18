@@ -147,3 +147,12 @@ class ProjectionRequiredError(PercellError):
     def __init__(self, message: str, stored: tuple[str, ...] = ()) -> None:
         self.stored: tuple[str, ...] = tuple(stored)
         super().__init__(message)
+
+
+class AddProjectionError(PercellError):
+    """A projection cannot be added to this dataset.
+
+    Raised when the dataset kept no z-series to project from, or already
+    stores the requested projection. The message says which, so batch tools
+    can report it per dataset. The dataset is left unchanged.
+    """

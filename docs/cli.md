@@ -30,6 +30,7 @@ Every tool also runs as a module (`python -m percell4.interfaces.cli.<module>`),
 | `percell-batch-measure` | Measure existing masks and export a timestamped run folder of CSVs. | [↓](#percell-batch-measure--measure--particle-analysis--csv-export) |
 | `percell-inspect` | Print (or JSON-dump) each dataset's metadata, description, and layers. | [↓](#percell-inspect--print-dataset-metadata--layers) |
 | `percell-import` | Import multi-dimensional files (channels, z, time inside one file) through Bio-Formats. | [↓](#percell-import--import-multi-dimensional-files-through-bio-formats) |
+| `percell-batch-add-projection` | Add a max, mean or sum projection computed from a dataset's stored z-series. | [↓](#percell-batch-add-projection--add-a-projection-from-the-stored-z-series) |
 | `percell-batch-validate-puncta` | **Dev harness.** Race puncta detectors against ground truth and lock a winner. | [↓](#percell-batch-validate-puncta--race-puncta-detectors-against-ground-truth) |
 | `percell-window-bakeoff` | **Dev harness.** Score auto-window-size finders against the SG-mask IoU oracle. | [↓](#percell-window-bakeoff--score-auto-window-size-finders-against-the-sg-mask-oracle) |
 
@@ -540,6 +541,28 @@ percell-import stack_01.tif --output-dir /data/h5/ --provision-java
 
 # Keep the full z-series for 3D viewing, plus max and mean projections
 percell-import stack_01.tif --output-dir /data/h5/ --keep max,mean,zseries
+```
+
+## `percell-batch-add-projection` — add a projection from the stored z-series
+
+Adds a `max`, `mean` or `sum` projection to datasets that were imported keeping their full z-series (`percell-import --keep ...,zseries`, or **Full z-series** in the import dialog), so you never need to re-import to analyse a different projection. The projection is computed plane by plane from the stored z-series, at the dataset's creation bin, and written in one step: a failure or interruption leaves the dataset unchanged. A z-series-only dataset becomes analysable once it has a projection. The launcher's Data tab offers the same action (**Add projection**).
+
+A dataset that kept no z-series, or already stores the projection, is reported as skipped and the batch continues. Exit codes: `0` at least one dataset gained the projection, `1` none did, `2` usage error.
+
+```bash
+percell-batch-add-projection PATHS ... --projection {max,mean,sum}
+```
+
+| Option | Purpose |
+|---|---|
+| `paths` | `.h5` files or folders of them (not recursive). |
+| `--projection {max,mean,sum}` | The projection to add. Required. |
+
+Example:
+
+```bash
+# Every dataset in the folder gains a mean projection
+percell-batch-add-projection /data/h5/ --projection mean
 ```
 
 ## Dataset descriptions

@@ -134,6 +134,7 @@ percell-batch-threshold    = "percell4.interfaces.cli.batch_threshold:main"
 percell-batch-measure      = "percell4.interfaces.cli.batch_measure:main"
 percell-inspect            = "percell4.interfaces.cli.inspect_dataset:main"
 percell-import             = "percell4.interfaces.cli.import_data:main"
+percell-batch-add-projection = "percell4.interfaces.cli.batch_add_projection:main"
 # Pre-0.5 names, kept as aliases for one release cycle (same targets as above).
 percell4-batch-cellpose-laptrack = "percell4.interfaces.cli.batch_process:main"
 percell4-batch-export       = "percell4.interfaces.cli.batch_export:main"

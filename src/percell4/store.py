@@ -276,6 +276,13 @@ class _StackWriter:
         return _ProjectionWriter(ds, dims)
 
 
+def _plane_of(ds: h5py.Dataset, dims: list[str], t: int, c: int) -> NDArray:
+    """The ``(H, W)`` plane of timepoint ``t`` and channel ``c`` of an
+    intensity array laid out as ``dims``."""
+    index = ((t,) if "T" in dims else ()) + ((c,) if "C" in dims else ())
+    return np.asarray(ds[index] if index else ds[()], dtype=np.float32)
+
+
 class _ProjectionWriter:
     """Fills a pre-allocated projection one (t, c) plane at a time."""
 
@@ -1434,6 +1441,103 @@ class DatasetStore:
         """
         with self.open_stack_writer() as stack:
             yield stack.begin_zseries(shape, channel_names)
+
+    def add_projection_from_zseries(
+        self,
+        name: str,
+        *,
+        on_plane: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        """Project the stored z-series into a new named projection (KTD10).
+
+        Each (timepoint, channel) stack is read plane by plane and reduced
+        (max; mean and sum accumulate in float64). Channels without a Z axis
+        (added later, or from ``.bin`` files) are copied from an existing
+        projection, as every projection holds them. The result is written to
+        a temporary array and renamed only when complete, so cancel or
+        failure leaves the dataset unchanged. Values come from the stored,
+        creation-binned planes.
+
+        Raises :class:`~percell4.domain.errors.AddProjectionError` when the
+        dataset kept no z-series or already stores ``name``, and
+        :class:`~percell4.domain.errors.ImportCancelledError` on cancel.
+        """
+        from percell4.domain.errors import AddProjectionError, ImportCancelledError
+
+        if name not in PROJECTION_NAMES:
+            raise ValueError(f"unknown projection {name!r}, expected one of {PROJECTION_NAMES}")
+        cancelled = is_cancelled or (lambda: False)
+        tmp_path = f"{PROJECTIONS_GROUP}_{name}.tmp"
+        with h5py.File(self.path, "a") as f:
+            zs = f.get(ZSERIES_PATH)
+            if not isinstance(zs, h5py.Dataset):
+                raise AddProjectionError(
+                    "The z-series was not kept for this dataset; re-import it "
+                    "keeping the z-series to add a projection."
+                )
+            stored = _stored_projection_arrays(f)
+            if name in stored:
+                raise AddProjectionError(f"The {name} projection is already stored.")
+            names = list(_decode_names(f["metadata"].attrs.get("channel_names", ())))
+            z_names = list(_decode_names(zs.attrs.get("channel_names", ())))
+            source = next(iter(stored.values()), None)
+            missing = [c for c in names if c not in z_names]
+            if missing and source is None:
+                raise AddProjectionError(
+                    f"Channels {missing} have no z-series and no projection to copy from."
+                )
+            timed = zs.ndim == 5
+            n_t = zs.shape[0] if timed else 1
+            h, w = int(zs.shape[-2]), int(zs.shape[-1])
+            dims = projection_layout(n_t, len(names))
+            shape = tuple({"T": n_t, "C": len(names), "H": h, "W": w}[d] for d in dims)
+            if tmp_path in f:
+                del f[tmp_path]
+            out = f.create_dataset(
+                tmp_path, shape=shape, dtype=np.float32, chunks=_choose_chunks(shape),
+                **_compression_kwargs(),
+            )
+            out.attrs["dims"] = dims
+            writer = _ProjectionWriter(out, dims)
+            src = f[source] if source is not None else None
+            src_dims = [str(d) for d in src.attrs.get("dims", ())] if src is not None else []
+            try:
+                for t in range(n_t):
+                    for c, channel in enumerate(names):
+                        if cancelled():
+                            raise ImportCancelledError(
+                                f"adding the {name} projection was cancelled"
+                            )
+                        if channel in z_names:
+                            zc = z_names.index(channel)
+                            image = self._project_zstack(zs, t, zc, name, timed)
+                        else:
+                            image = _plane_of(src, src_dims, t, c)
+                        writer.write_plane(t, c, image)
+                        if on_plane is not None:
+                            on_plane(t, c)
+            except BaseException:
+                del f[tmp_path]
+                raise
+            f.require_group(PROJECTIONS_GROUP)
+            f.move(tmp_path, f"{PROJECTIONS_GROUP}/{name}")
+
+    @staticmethod
+    def _project_zstack(zs: h5py.Dataset, t: int, c: int, name: str, timed: bool) -> NDArray:
+        acc = None
+        n_z = zs.shape[-3]
+        for z in range(n_z):
+            plane = zs[t, c, z] if timed else zs[c, z]
+            if acc is None:
+                acc = plane.astype(np.float64 if name != "max" else np.float32, copy=True)
+            elif name == "max":
+                np.maximum(acc, plane, out=acc)
+            else:
+                acc += plane
+        if name == "mean":
+            acc /= n_z
+        return acc.astype(np.float32)
 
     def has_zseries(self) -> bool:
         """True when the dataset stores a z-series. Metadata only."""

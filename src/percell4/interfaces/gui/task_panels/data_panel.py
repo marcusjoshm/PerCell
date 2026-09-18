@@ -186,6 +186,19 @@ class DataPanel(QWidget):
         chan_mgmt_row.addWidget(btn_delete_chan)
         mgmt_layout.addLayout(chan_mgmt_row)
 
+        # Projections: add max / mean / sum from the stored z-series (U9).
+        mgmt_layout.addWidget(QLabel("Projections:"))
+        proj_row = QHBoxLayout()
+        self._projection_buttons: dict[str, QPushButton] = {}
+        for name in ("max", "mean", "sum"):
+            btn = QPushButton(f"Add {name}")
+            btn.clicked.connect(lambda _=False, n=name: self._on_add_projection(n))
+            proj_row.addWidget(btn)
+            self._projection_buttons[name] = btn
+        proj_row.addStretch()
+        mgmt_layout.addLayout(proj_row)
+        self._refresh_projection_buttons()
+
         mgmt_layout.addWidget(QLabel("Description:"))
         desc_mgmt_row = QHBoxLayout()
         desc_mgmt_row.addStretch()
@@ -222,6 +235,8 @@ class DataPanel(QWidget):
         # rename/delete/metadata.
         if change.channel_list:
             self.refresh_management_combos()
+        if getattr(change, "data", False) or getattr(change, "projection_list", False):
+            self._refresh_projection_buttons()
         if change.segmentation_list:
             self._refresh_seg_combos()
             self.refresh_dataset_info()
@@ -238,6 +253,55 @@ class DataPanel(QWidget):
             # the SessionWindow SpinBox owns that.
             self.refresh_dataset_info()
             self.refresh_management_combos()
+
+    # ── Projections (z-stack plan U9) ─────────────────────────
+
+    def _refresh_projection_buttons(self) -> None:
+        """Enable Add max/mean/sum only where it can work; say why otherwise."""
+        store = self._get_store()
+        try:
+            has_zseries = store is not None and store.has_zseries()
+            stored = set(store.list_projections()) if store is not None else set()
+        except Exception:  # noqa: BLE001 - an unreadable file offers nothing
+            has_zseries, stored = False, set()
+        for name, btn in self._projection_buttons.items():
+            if store is None:
+                btn.setEnabled(False)
+                btn.setToolTip("Load a dataset first.")
+            elif name in stored:
+                btn.setEnabled(False)
+                btn.setToolTip(f"The {name} projection is already stored.")
+            elif not has_zseries:
+                btn.setEnabled(False)
+                btn.setToolTip(
+                    "The z-series was not kept for this dataset; re-import it "
+                    "keeping the z-series to add a projection."
+                )
+            else:
+                btn.setEnabled(True)
+                btn.setToolTip(
+                    f"Compute the {name} projection from the stored z-series. "
+                    "The active projection does not change."
+                )
+
+    def _on_add_projection(self, name: str) -> None:
+        from qtpy.QtWidgets import QApplication
+
+        from percell4.adapters.hdf5_store import Hdf5DatasetRepository
+        from percell4.application.use_cases.add_projection import AddProjection
+        from percell4.domain.errors import PercellError
+
+        session = self.data_model.session
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            AddProjection(Hdf5DatasetRepository(), session).execute(name)
+        except PercellError as e:
+            self._show_status(f"Could not add the {name} projection: {e}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._refresh_projection_buttons()
+        self._show_status(f"Added the {name} projection")
 
     def _refresh_seg_combos(self) -> None:
         """Re-list the Management Segmentations dropdown from the store.

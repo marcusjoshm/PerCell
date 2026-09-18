@@ -261,6 +261,21 @@ class Hdf5DatasetRepository:
     ) -> None:
         self._store(handle).write_array(path, data, attrs=attrs)
 
+    def list_projections(self, handle: DatasetHandle) -> list[str]:
+        return list(self._store(handle).list_projections())
+
+    def add_projection(
+        self,
+        handle: DatasetHandle,
+        name: str,
+        *,
+        on_plane: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        self._store(handle).add_projection_from_zseries(
+            name, on_plane=on_plane, is_cancelled=is_cancelled
+        )
+
     def rewrite_projections(
         self,
         handle: DatasetHandle,
