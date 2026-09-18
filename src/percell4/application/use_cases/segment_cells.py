@@ -176,6 +176,7 @@ class SegmentCells:
         name: str | None = None,
         view_bin: int = 1,
         edge_margin: int = 0,
+        source_channel: str | None = None,
     ) -> SegmentationResult:
         """Post-process masks, write to store, update session.
 
@@ -192,6 +193,8 @@ class SegmentCells:
         stays canonical (dataset-wide-binning storage invariant) and we
         stamp ``created_at_bin = view_bin`` on the dataset so the
         DataPanel layer-list annotation knows.
+
+        ``source_channel`` is recorded on the segmentation (R10) when given.
         """
         from percell4.domain.io.view_bin import nn_upsample_2d
         from percell4.gui._bin_suffix import bin_suffix
@@ -249,6 +252,8 @@ class SegmentCells:
                 np.int32, copy=False
             )
             attrs = {"created_at_bin": int(view_bin)}
+        if source_channel:
+            attrs = {**(attrs or {}), "source_channel": str(source_channel)}
 
         # Store-before-viewer: write to HDF5 first
         self._repo.write_labels(handle, seg_name, labels, attrs=attrs)

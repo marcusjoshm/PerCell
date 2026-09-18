@@ -31,7 +31,7 @@ import pandas as pd
 from percell4.domain.measure.grouper import GroupingResult
 from percell4.gui.threshold_qc import ThresholdQCController
 from percell4.gui.workflows.base_runner import PhaseResult
-from percell4.store import DatasetStore
+from percell4.store import DatasetStore, source_channel_attrs
 from percell4.workflows.models import ThresholdingRound, WorkflowDatasetEntry
 from percell4.workflows.phases import _channel_from_frame, _channel_index, _resolve_area_px
 
@@ -471,7 +471,10 @@ class TimelapseThresholdQCQueueEntry:
                 for t in range(self._n_timepoints)
             ]
             combined = np.stack(frames, axis=0).astype(np.uint8)  # (T, H, W)
-            self._store.write_mask(self._round_spec.name, combined)
+            self._store.write_mask(
+                self._round_spec.name, combined,
+                attrs=source_channel_attrs(self._round_spec.channel),
+            )
 
             col_name = f"group_{self._round_spec.channel}_{self._round_spec.metric}"
             groups_all = (

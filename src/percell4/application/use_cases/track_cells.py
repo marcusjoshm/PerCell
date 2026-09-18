@@ -78,7 +78,14 @@ class TrackCells:
         seg_name = tracked_name or f"{raw_seg_name}_tracked"
 
         # Creator: store labels + lineage, refresh inventory, set active.
-        self._repo.write_labels(handle, seg_name, built.tracked_labels)
+        # Tracking relabels the same cells: keep the channel they came from.
+        source = self._repo.read_array_attrs(handle, f"labels/{seg_name}").get(
+            "source_channel"
+        )
+        self._repo.write_labels(
+            handle, seg_name, built.tracked_labels,
+            attrs={"source_channel": str(source)} if source else None,
+        )
         self._repo.write_tracks(handle, seg_name, built.lineage)
         mask_set = set(self._repo.list_masks(handle))
         seg_names = [

@@ -81,6 +81,12 @@ class MeasureCells:
                     label_to_val = dict(zip(groups_df["label"], groups_df[col]))
                     df[col] = df["label"].map(label_to_val)
 
+        # On a dataset with named projections every row records the one it
+        # was measured on; datasets from before them keep today's columns.
+        projection = self._session.active_projection
+        if handle.metadata.get("named_projections") and projection and not df.empty:
+            df = df.assign(projection=projection)
+
         # Store-before-session: write to HDF5 first
         self._repo.write_measurements(handle, df)
         self._session.set_measurements(df)

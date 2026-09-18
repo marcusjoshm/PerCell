@@ -80,7 +80,7 @@ class FakeRepo:
             return mask[timepoint]
         return mask
 
-    def write_mask(self, handle, name, data):
+    def write_mask(self, handle, name, data, attrs=None):
         self.written_masks[name] = data
 
     def list_masks(self, handle):

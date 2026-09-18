@@ -314,6 +314,18 @@ class _ZSeriesWriter:
             self._ds[c, z] = plane
 
 
+#: Attribute naming the intensity channel a segmentation or mask was made
+#: from (R10). Absent where no single channel applies (imported layers,
+#: whole-field). A segmentation belongs to no projection: it can be measured
+#: on any of them.
+SOURCE_CHANNEL_ATTR = "source_channel"
+
+
+def source_channel_attrs(channel: str | None) -> dict[str, str]:
+    """``{"source_channel": channel}``, or ``{}`` when there is none."""
+    return {SOURCE_CHANNEL_ATTR: str(channel)} if channel else {}
+
+
 # Provenance-attribute keys for masks captured by "Apply Current Phasor
 # as Mask". Single source of truth so future readers cannot drift from
 # the writer in main_window.py.
@@ -590,6 +602,17 @@ class DatasetStore:
             return () if INTENSITY_PATH in paths.values() else tuple(paths)
         finally:
             self._close_if_not_session(f)
+
+    def resolved_projection(self) -> str | None:
+        """The named projection intensity reads resolve to; ``None`` for a
+        dataset written before named projections (or with no intensity).
+
+        Measurement outputs record it (KTD9); legacy datasets keep today's
+        columns.
+        """
+        path = self.resolved_intensity_path()
+        prefix = f"{PROJECTIONS_GROUP}/"
+        return path[len(prefix):] if path.startswith(prefix) else None
 
     def resolved_intensity_path(self) -> str:
         """The HDF5 path this store's intensity reads come from.
@@ -1935,6 +1958,14 @@ class DatasetStore:
     def list_tracks(self) -> list[str]:
         """List all lineage-table names under /tracks/."""
         return self.list_groups("tracks")
+
+    def source_channel(self, kind: str, name: str) -> str | None:
+        """The channel ``/labels/<name>`` (``kind="labels"``) or
+        ``/masks/<name>`` was made from, or ``None`` when not recorded."""
+        value = self.read_array_attrs(f"{kind}/{name}").get(SOURCE_CHANNEL_ATTR)
+        if isinstance(value, bytes):
+            value = value.decode()
+        return str(value) if value else None
 
     def set_mask_attrs(self, name: str, attrs: dict[str, Any]) -> None:
         """Write HDF5 attributes onto an existing /masks/<name> dataset.

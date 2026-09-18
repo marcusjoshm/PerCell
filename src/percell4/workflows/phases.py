@@ -56,7 +56,7 @@ from percell4.domain.segmentation.postprocess import (
     relabel_sequential,
 )
 from percell4.io.paths import scan_files
-from percell4.store import DatasetStore
+from percell4.store import DatasetStore, source_channel_attrs
 from percell4.workflows.artifacts import write_atomic
 from percell4.workflows.failures import DatasetFailure, FailureRecord
 from percell4.workflows.models import (
@@ -445,6 +445,12 @@ def _postprocess_labels(
     return relabel_sequential(labels)
 
 
+def _channel_name_at(store: DatasetStore, channel_idx: int) -> str | None:
+    """The name of intensity channel ``channel_idx``, or None when unnamed."""
+    names = list(store.metadata.get("channel_names") or [])
+    return str(names[channel_idx]) if 0 <= channel_idx < len(names) else None
+
+
 def segment_one(
     store: DatasetStore,
     cfg: CellposeSettings,
@@ -479,7 +485,7 @@ def segment_one(
             image = _read_segmentation_channel_stack(store, channel_idx, n_timepoints)  # (T, H, W)
         else:
             image = _read_segmentation_channel(store, channel_idx=channel_idx)
-    except (KeyError, IndexError, ValueError) as e:
+    except (KeyError, IndexError, ValueError, ProjectionRequiredError) as e:
         logger.exception("failed to read intensity for segmentation")
         return (
             np.zeros((0, 0), dtype=np.int32),
@@ -549,7 +555,9 @@ def segment_one(
     # channel/diameter combination is a routine condition (especially
     # on dim or unusual data); the workflow has to recover from it.
     try:
-        store.write_labels(seg_name, labels)
+        store.write_labels(
+            seg_name, labels, attrs=source_channel_attrs(_channel_name_at(store, channel_idx))
+        )
     except Exception as e:
         logger.exception("failed to write /labels/%s", seg_name)
         return (
@@ -613,7 +621,10 @@ def track_one(
 
     seg_name = tracked_name or f"{raw_seg_name}_tracked"
     try:
-        store.write_labels(seg_name, built.tracked_labels)
+        store.write_labels(
+            seg_name, built.tracked_labels,
+            attrs=source_channel_attrs(store.source_channel("labels", raw_seg_name)),
+        )
         store.write_tracks(seg_name, built.lineage)
     except Exception as e:
         logger.exception("failed to write tracked segmentation %s", seg_name)
@@ -1284,7 +1295,10 @@ def _classify_and_write_cnr(
                 continue
             name = f"{round_spec.name}{suffix}"
             try:
-                store.write_mask(name, pop_mask.astype(np.uint8))
+                store.write_mask(
+                    name, pop_mask.astype(np.uint8),
+                    attrs=source_channel_attrs(round_spec.channel),
+                )
             except Exception as e:
                 logger.exception("write_mask failed for CNR population %s", name)
                 return DatasetFailure.THRESHOLD_ERROR, f"CNR population write failed ({name}): {e}"
@@ -1380,7 +1394,10 @@ def _classify_and_write_cnr_stack(
                 continue
             name = f"{round_spec.name}{suffix}"
             try:
-                store.write_mask(name, stack.astype(np.uint8))
+                store.write_mask(
+                    name, stack.astype(np.uint8),
+                    attrs=source_channel_attrs(round_spec.channel),
+                )
             except Exception as e:
                 logger.exception("write_mask failed for CNR population %s", name)
                 # Don't leave a half-written split (e.g. _low on disk, _high failed):
@@ -1519,7 +1536,9 @@ def apply_threshold_headless(
             group_dfs.append(gdf)
         combined = np.stack(mask_frames, axis=0).astype(np.uint8)  # (T, H, W)
         try:
-            store.write_mask(round_spec.name, combined)
+            store.write_mask(
+                round_spec.name, combined, attrs=source_channel_attrs(round_spec.channel)
+            )
         except Exception as e:
             logger.exception("write_mask failed")
             return DatasetFailure.THRESHOLD_ERROR, f"write_mask failed: {e}"
@@ -1561,7 +1580,9 @@ def apply_threshold_headless(
     if err:
         return DatasetFailure.THRESHOLD_ERROR, err
     try:
-        store.write_mask(round_spec.name, mask)
+        store.write_mask(
+            round_spec.name, mask, attrs=source_channel_attrs(round_spec.channel)
+        )
     except Exception as e:
         logger.exception("write_mask failed")
         return DatasetFailure.THRESHOLD_ERROR, f"write_mask failed: {e}"
@@ -2191,7 +2212,22 @@ def _measure_frame(
     return df, None, f"{len(df)} cells, {len(df.columns)} columns"
 
 
-def measure_one(
+def measure_one(store: DatasetStore, *args: Any, **kwargs: Any):
+    """Measure one dataset; see :func:`_measure_one_unlabeled`.
+
+    On a dataset that stores named projections, every row records the one it
+    was measured on in a ``projection`` column (KTD9); datasets from before
+    named projections keep exactly today's columns.
+    """
+    df, failure, msg = _measure_one_unlabeled(store, *args, **kwargs)
+    if not df.empty:
+        projection = store.resolved_projection()
+        if projection is not None:
+            df = df.assign(projection=projection)
+    return df, failure, msg
+
+
+def _measure_one_unlabeled(
     store: DatasetStore,
     round_specs: list[ThresholdingRound],
     metric_names: list[str] | None = None,

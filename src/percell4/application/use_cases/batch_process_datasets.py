@@ -367,7 +367,7 @@ def batch_process_datasets(
                     spec.name, perf_counter() - t0,
                 )
                 seg_result = seg_uc.finalize(
-                    raw, name=seg_name,
+                    raw, name=seg_name, source_channel=ch,
                     min_area=settings.min_size,
                     remove_edge_cells=remove_edge_cells,
                     edge_margin=edge_margin,

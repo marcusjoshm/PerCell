@@ -64,7 +64,9 @@ class AcceptThreshold:
         mask_name = f"{method}_{channel_name}"
 
         # Store-before-layer: write to HDF5 first
-        self._repo.write_mask(handle, mask_name, mask)
+        self._repo.write_mask(
+            handle, mask_name, mask, attrs={"source_channel": str(channel_name)}
+        )
 
         # Refresh inventory before auto-selecting so subscribers re-list
         # the mask combos before they look up the just-written name.

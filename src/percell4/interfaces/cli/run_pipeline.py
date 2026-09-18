@@ -137,7 +137,10 @@ def run_pipeline(
                 diameter=cellpose_diameter,
             )
 
-        result = segment_uc.finalize(raw_masks)
+        channel_names = handle.metadata.get("channel_names") or []
+        result = segment_uc.finalize(
+            raw_masks, source_channel=channel_names[0] if channel_names else None
+        )
         seg_name = result.seg_name
         session.set_active_segmentation(seg_name)
         logger.info(
@@ -204,7 +207,9 @@ def run_pipeline(
                 masks.append((frame > value_t).astype(np.uint8))
             mask_stack = np.stack(masks, axis=0)
             mask_name = f"{threshold_method}_{ch_name}"
-            repo.write_mask(handle, mask_name, mask_stack)
+            repo.write_mask(
+                handle, mask_name, mask_stack, attrs={"source_channel": str(ch_name)}
+            )
             session.refresh_resource_lists(mask_names=repo.list_masks(handle))
             session.set_active_mask(mask_name)
             n_pos = int(mask_stack.sum())

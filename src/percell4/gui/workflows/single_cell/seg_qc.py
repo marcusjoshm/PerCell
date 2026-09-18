@@ -61,7 +61,7 @@ from percell4.domain.segmentation.postprocess import (
 from percell4.domain.segmentation.preprocess import apply_lut
 from percell4.gui._dialog_utils import message_box, progress_dialog
 from percell4.gui.workflows.base_runner import PhaseResult
-from percell4.store import DatasetStore
+from percell4.store import DatasetStore, source_channel_attrs
 from percell4.workflows.models import CELLPOSE_MODELS, WorkflowDatasetEntry
 
 logger = logging.getLogger(__name__)
@@ -1372,7 +1372,13 @@ class SegmentationQCController(QObject):
                 )
                 if answer != QMessageBox.Yes:
                     return
-            self._store.write_labels(self._seg_name, final_labels)
+            names = list(self._store.metadata.get("channel_names") or [])
+            channel = (
+                names[self._channel_idx] if 0 <= self._channel_idx < len(names) else None
+            )
+            self._store.write_labels(
+                self._seg_name, final_labels, attrs=source_channel_attrs(channel)
+            )
         except Exception as e:
             logger.exception("seg QC write_labels failed for %s", self._entry.name)
             self._finish(

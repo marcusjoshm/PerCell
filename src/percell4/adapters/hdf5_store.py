@@ -32,6 +32,9 @@ def _build_handle_metadata(store: DatasetStore) -> dict[str, Any]:
     md["segmentation_names"] = [n for n in label_names if n not in mask_set]
     md["mask_names"] = list(mask_names)
     md["projection_names"] = list(store.list_projections())
+    # Whether the projections are named arrays (not one legacy /intensity):
+    # only then do measurements record the projection (KTD9).
+    md["named_projections"] = bool(store.named_projections())
     md["has_zseries"] = store.has_zseries()
     return md
 

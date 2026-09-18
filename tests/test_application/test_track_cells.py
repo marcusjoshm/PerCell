@@ -19,12 +19,17 @@ class FakeRepo:
         self.labels = dict(raw_labels)
         self.masks: dict[str, np.ndarray] = {}
         self.tracks: dict[str, pd.DataFrame] = {}
+        self.attrs: dict[str, dict] = {}
 
     def read_labels(self, handle, name, view_bin=1):
         return self.labels[name]
 
     def write_labels(self, handle, name, data, attrs=None):
         self.labels[name] = data
+        self.attrs[f"labels/{name}"] = dict(attrs or {})
+
+    def read_array_attrs(self, handle, path):
+        return dict(self.attrs.get(path, {}))
 
     def list_labels(self, handle):
         return list(self.labels.keys())
@@ -121,3 +126,11 @@ def test_tracking_2d_raw_segmentation_raises():
     uc = TrackCells(repo, _session(3), LaptrackTracker())
     with pytest.raises(ValueError, match=r"\(T, H, W\)"):
         uc.execute("raw2d")
+
+
+def test_tracking_keeps_the_source_channel():
+    repo = FakeRepo({"cp": _linking_stack()})
+    repo.attrs["labels/cp"] = {"source_channel": "ch0"}
+    session = _session(3)
+    TrackCells(repo, session, LaptrackTracker()).execute("cp")
+    assert repo.attrs["labels/cp"]["source_channel"] == "ch0"

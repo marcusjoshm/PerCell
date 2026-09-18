@@ -622,6 +622,9 @@ class SegmentationPanel(QWidget):
             return
         self._cellpose_pending_name = chosen_name
         self._cellpose_pending_bin = active_bin
+        # The channel is captured with the bin: switching channels mid-run
+        # must not relabel what this run segmented.
+        self._cellpose_pending_channel = self.data_model.session.active_channel
 
         import numpy as np
 
@@ -715,6 +718,7 @@ class SegmentationPanel(QWidget):
                 name=getattr(self, "_cellpose_pending_name", None),
                 view_bin=getattr(self, "_cellpose_pending_bin", 1),
                 edge_margin=self._cp_edge_margin.value(),
+                source_channel=getattr(self, "_cellpose_pending_channel", None),
             )
         except ValueError as e:
             self._show_status(f"Error: {e}")
