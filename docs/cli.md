@@ -494,7 +494,7 @@ percell-inspect /scratch/dishes/ --grep PFA
 
 ## `percell-import` — import multi-dimensional files through Bio-Formats
 
-Imports microscopy files whose channels, z-series and time points live inside one file — ImageJ hyperstacks, OME-TIFF, and the other formats Bio-Formats reads — into `.h5` datasets. Each series of each file becomes one dataset. Z is always projected at import (`mip`, `mean` or `sum`); the dataset stores the pixel size, the z-spacing and the projection used, which `percell-inspect` prints.
+Imports microscopy files whose channels, z-series and time points live inside one file — ImageJ hyperstacks, OME-TIFF, and the other formats Bio-Formats reads — into `.h5` datasets. Each series of each file becomes one dataset. `--keep` chooses what each dataset stores from its z-stack: any of the `max`, `mean` and `sum` projections and/or the full z-series (`zseries`, float32, for 2D and 3D viewing). The default keeps one projection by `--z-method` (max). Analysis always runs on a projection, so a dataset kept with `zseries` alone is view-only until a projection is added. Files without a Z axis ignore `--keep` and import as before. The dataset stores the pixel size, the z-spacing and what it kept, which `percell-inspect` prints.
 
 It scans the same way as the **In-file** mode of the import dialog: it reads file headers only, never pixel data, then probes the multi-plane files through Bio-Formats and prints the suggested scheme. Single-plane files are listed as excluded; import them with the dialog's Flat or Subdirectory mode. Unlike the batch tools above, its positional arguments are image files or folders, not `.h5` datasets.
 
@@ -504,8 +504,8 @@ Bio-Formats needs Java. PerCell never downloads anything unless you pass `--prov
 
 ```bash
 percell-import [SOURCES ...] [--output-dir DIR] [--scan-only] [--scheme-out PATH]
-               [--scheme PATH] [--z-method {mip,mean,sum}] [--overwrite]
-               [--provision-java] [--json]
+               [--scheme PATH] [--z-method {mip,mean,sum}] [--keep LIST]
+               [--z-step UM] [--overwrite] [--provision-java] [--json]
 ```
 
 | Option | Purpose |
@@ -515,7 +515,9 @@ percell-import [SOURCES ...] [--output-dir DIR] [--scan-only] [--scheme-out PATH
 | `--scan-only` | Print the suggested scheme and import nothing. |
 | `--scheme-out PATH` | Write the scheme to a JSON file you can edit and replay. |
 | `--scheme PATH` | Import the sources listed in this scheme file instead of scanning. |
-| `--z-method {mip,mean,sum}` | Z projection for a scan (default `mip`). A scheme file keeps its own. `sum` is not comparable across files with different z-counts. |
+| `--z-method {mip,mean,sum}` | Z projection for a scan (default `mip`). A scheme file keeps its own. `sum` is not comparable across files with different z-counts. Ignored when `--keep` is given. |
+| `--keep LIST` | What to store from each z-stack, comma-separated: any of `max`, `mean`, `sum` and `zseries`. The full z-series costs about 4 bytes per voxel before compression (a 3 × 97 × 1024 × 1024 stack is about 1.2 GB). Overrides a scheme file's own choice and is written to `--scheme-out`. |
+| `--z-step UM` | Z step in µm to record when a file carries none (otherwise 3D renders cube voxels). |
 | `--overwrite` | Replace existing `.h5` outputs as a whole (their segmentations and masks are lost). |
 | `--provision-java` | Download Java and Bio-Formats into the PerCell cache before scanning. |
 | `--json` | Print the scheme (and the imported paths) as JSON instead of text. |
@@ -531,6 +533,9 @@ percell-import --scheme scheme.json --output-dir /data/h5/
 
 # First run on a machine without Java
 percell-import stack_01.tif --output-dir /data/h5/ --provision-java
+
+# Keep the full z-series for 3D viewing, plus max and mean projections
+percell-import stack_01.tif --output-dir /data/h5/ --keep max,mean,zseries
 ```
 
 ## Dataset descriptions

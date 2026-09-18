@@ -140,3 +140,23 @@ def test_storage_choice_from_z_method_and_parse():
     assert StorageChoice.parse("zseries, MEAN") == StorageChoice(("mean",), True)
     with pytest.raises(ValueError, match="unknown keep"):
         StorageChoice.parse("max,median")
+
+
+def test_storage_estimate_counts_zseries_and_each_projection():
+    from percell4.domain.io.projections import StorageChoice, estimate_storage_bytes
+
+    z, p = estimate_storage_bytes(StorageChoice(("max",), True), 36, 3, 97, 1024, 1024)
+    assert z == 43_939_528_704
+    assert p == 36 * 3 * 1024 * 1024 * 4
+    z2, p2 = estimate_storage_bytes(StorageChoice(("max", "mean"), True), 36, 3, 97, 1024, 1024)
+    assert z2 == z and p2 == 2 * p
+    assert estimate_storage_bytes(StorageChoice(("max",)), 1, 1, 5, 10, 10) == (0, 400)
+
+
+def test_format_bytes():
+    from percell4.domain.io.projections import format_bytes
+
+    assert format_bytes(512) == "512 bytes"
+    assert format_bytes(1_234_567) == "1.2 MB"
+    assert format_bytes(43_939_528_704) == "43.9 GB"
+    assert format_bytes(2_500_000_000_000) == "2.5 TB"

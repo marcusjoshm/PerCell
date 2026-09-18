@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # infile imports this module; a runtime import would cycle
     from percell4.domain.io.infile import ImportScheme
+    from percell4.domain.io.projections import StorageChoice
 
 _MAX_PATTERN_LENGTH = 200
 
@@ -324,6 +325,12 @@ class CompressConfig:
     # In-file mode: the reviewed scheme. None for the token and tokenless modes,
     # which import ``datasets`` through import_dataset instead.
     infile_scheme: ImportScheme | None = None
+    # What to keep from z-stacks (projections and/or the z-series). None when
+    # the selection has no Z axis, or for a plan saved before the choice
+    # existed: one projection by ``z_project_method``, as before.
+    storage: StorageChoice | None = None
+    # Z step in µm for token imports whose files carry no ImageJ spacing.
+    z_step_um: float | None = None
 
 
 @dataclass(frozen=True)

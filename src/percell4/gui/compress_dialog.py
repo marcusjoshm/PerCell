@@ -54,6 +54,7 @@ from percell4.gui._dialog_utils import (
 )
 from percell4.gui._stitching_form import StitchingForm
 from percell4.gui.infile_review import InfileReviewTable
+from percell4.gui.storage_choice import StorageChoiceForm
 
 # Index of the "Tokenless (by name)" entry in the Discovery combo.
 _TOKENLESS_INDEX = 2
@@ -127,6 +128,8 @@ class CompressDialog(QDialog):
         self._all_tiles: list[str] = []
         self._all_z_slices: list[str] = []
         self._all_timepoints: list[str] = []
+        # First-file TIFF header per path (shape, ImageJ z spacing): read once.
+        self._header_cache: dict[Path, dict] = {}
         self._discovery_generation = 0
         # In Tokenless mode, discovery synthesizes a channel regex from the
         # derived names; cache it so _current_token_config threads the identical
@@ -324,15 +327,12 @@ class CompressDialog(QDialog):
         settings_group = QGroupBox("Settings")
         settings_layout = QVBoxLayout(settings_group)
 
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("Z-Projection:"))
-        self._z_combo = QComboBox()
-        # No "none": the store has no Z axis, so every import projects Z.
-        self._z_combo.addItems(["mip", "mean", "sum"])
-        self._z_combo.currentTextChanged.connect(self._on_z_method_changed)
-        row1.addWidget(self._z_combo)
-        row1.addStretch()
-        settings_layout.addLayout(row1)
+        # What to keep from z-stacks (projections and/or the z-series). Shown
+        # only when the selection has a Z axis (R4); max only by default.
+        self._storage_form = StorageChoiceForm()
+        self._storage_form.changed.connect(self._on_storage_changed)
+        self._storage_form.setVisible(False)
+        settings_layout.addWidget(self._storage_form)
 
         # Tile stitching — every control lives in the canonical StitchingForm.
         # The checkbox already labels the section, so the form's own group
@@ -590,15 +590,27 @@ class CompressDialog(QDialog):
             ]
 
         infile_scheme: ImportScheme | None = None
+        has_z = self._has_z()
+        storage = self._storage_form.choice() if has_z else None
         if self._is_infile_mode():
-            from percell4.domain.io.infile import with_z_method
+            from percell4.domain.io.infile import with_storage, with_z_method
 
-            infile_scheme = with_z_method(self._review.scheme(), self._z_combo.currentText())
+            scheme = self._review.scheme()
+            infile_scheme = (
+                with_storage(scheme, storage)
+                if storage is not None
+                else with_z_method(scheme, self._storage_z_method())
+            )
             datasets = []
             gui_states = {}
+        z_step = (
+            self._storage_form.z_step_um() if has_z and not self._is_infile_mode() else None
+        )
 
         return CompressConfig(
-            z_project_method=self._z_combo.currentText(),
+            z_project_method=self._storage_z_method(),
+            storage=storage,
+            z_step_um=z_step,
             token_config=self._current_token_config(),
             output_dir=output_dir,
             selected_channels=selected_channels,
@@ -724,9 +736,106 @@ class CompressDialog(QDialog):
         self._infile_group.setVisible(infile)
         self._update_compress_button()
 
-    def _on_z_method_changed(self, text: str) -> None:
-        if text:
-            self._review.set_z_method(text)
+    def _on_storage_changed(self) -> None:
+        self._review.set_z_method(self._storage_z_method())
+        self._update_compress_button()
+
+    def _storage_z_method(self) -> str:
+        """The z method the kept projections imply, for the z-count notes and
+        for plans that predate the storage choice: sum when a sum projection
+        is kept, else the first kept projection, else max."""
+        from percell4.domain.io.projections import method_for_projection
+
+        choice = self._storage_form.choice()
+        if choice is None or not choice.projections:
+            return "mip"
+        if "sum" in choice.projections:
+            return "sum"
+        return method_for_projection(choice.projections[0])
+
+    def _has_z(self) -> bool:
+        """True when the selection has a Z axis, so the storage choice applies."""
+        if self._is_infile_mode():
+            return any(
+                s.effective is not None and s.effective.size_z > 1
+                for s in self._review.scheme().sources
+            )
+        return len(self._all_z_slices) > 1
+
+    def _first_header(self) -> dict | None:
+        """Shape and ImageJ z spacing of the first token-mode file, read once."""
+        for ds in self._datasets:
+            for f in ds.files:
+                if f.path.suffix.lower() not in (".tif", ".tiff"):
+                    continue
+                if f.path not in self._header_cache:
+                    from percell4.adapters.readers import read_tiff_metadata
+
+                    self._header_cache[f.path] = read_tiff_metadata(f.path)
+                return self._header_cache[f.path]
+        return None
+
+    def _checked_count(self, widget: QListWidget) -> int:
+        return sum(
+            widget.item(i).checkState() == Qt.Checked for i in range(widget.count())
+        )
+
+    def storage_estimate(self) -> tuple[int, int] | None:
+        """Uncompressed ``(z-series, projections)`` bytes of the import, or None.
+
+        In-file: from each importable source's probe. Token modes: z-count x
+        channels x timepoints x the first file's plane x tile count, per
+        checked dataset. Both divide the plane by the creation bin.
+        """
+        from percell4.domain.io.projections import estimate_storage_bytes
+
+        choice = self._storage_form.choice()
+        if choice is None or not self._has_z():
+            return None
+        k = max(1, int(self._creation_bin_spin.value()))
+        total_z = total_p = 0
+        if self._is_infile_mode():
+            for src in self._review.importable_sources():
+                e = src.effective
+                if e is None or e.size_z <= 1:
+                    continue
+                z, p = estimate_storage_bytes(
+                    choice, e.size_t, len(src.channel_indices), e.size_z,
+                    e.size_y // k, e.size_x // k,
+                )
+                total_z += z
+                total_p += p
+            return total_z, total_p
+        header = self._first_header()
+        if not header or "shape" not in header:
+            return None
+        h, w = (int(x) for x in header["shape"][-2:])
+        n_tiles = max(1, len(self._all_tiles))
+        if self._manual_radio.isChecked():
+            n_ch = sum(cfg.checkbox.isChecked() for cfg in self._channel_configs.values())
+        else:
+            n_ch = self._checked_count(self._ch_list)
+        z, p = estimate_storage_bytes(
+            choice, len(self._all_timepoints), n_ch, len(self._all_z_slices),
+            h // k, (w * n_tiles) // k,
+        )
+        n_ds = max(1, self._checked_count(self._ds_list))
+        return z * n_ds, p * n_ds
+
+    def _refresh_storage(self) -> None:
+        """Show the storage choice only for data with Z, and keep the review
+        table, the Z step field and the size estimate current."""
+        has_z = self._has_z()
+        infile = self._is_infile_mode()
+        form = self._storage_form
+        form.setVisible(has_z)
+        form.set_z_step_visible(has_z and not infile)
+        if has_z and not infile:
+            header = self._first_header() or {}
+            form.set_detected_z_step(header.get("z_spacing_um"))
+        self._review.set_storage(form.choice())
+        estimate = self.storage_estimate()
+        form.set_estimate(*(estimate or (None, None)))
 
     def _on_mode_changed(self, checked: bool) -> None:
         """Toggle between auto and manual mode."""
@@ -745,11 +854,10 @@ class CompressDialog(QDialog):
     def _on_creation_bin_changed(self, _value: int) -> None:
         """Placeholder slot for the creation-bin spinner.
 
-        The value is read in ``compress_config`` at Compress time, so no
-        cross-widget side effect is needed here today. The slot exists so
-        the user-edit signal is wired at construction (per the
-        qt-wire-user-edit-signals convention).
+        The value is read in ``compress_config`` at Compress time; here it
+        only updates the storage size estimate, which divides by the bin.
         """
+        self._refresh_storage()
 
     def _on_stitch_toggled(self, checked: bool) -> None:
         self._stitch_widget.setVisible(checked)
@@ -967,7 +1075,7 @@ class CompressDialog(QDialog):
                 selection,
                 reader_factory=self._reader_factory,
                 mode=DiscoveryMode.INFILE,
-                z_method=self._z_combo.currentText(),
+                z_method=self._storage_z_method(),
                 on_file=on_file,
                 is_cancelled=progress.wasCanceled,
             )
@@ -1218,8 +1326,13 @@ class CompressDialog(QDialog):
         self._on_flim_group_toggled(self._flim_group.isChecked())
 
     def _update_compress_button(self) -> None:
+        self._refresh_storage()
+        # Data with Z needs something kept (a projection or the z-series).
+        storage_ok = not self._has_z() or self._storage_form.choice() is not None
         if self._is_infile_mode():
-            self._btn_compress.setEnabled(bool(self._review.importable_sources()))
+            self._btn_compress.setEnabled(
+                storage_ok and bool(self._review.importable_sources())
+            )
             return
         any_ds = any(
             self._ds_list.item(i).checkState() == Qt.Checked
@@ -1234,7 +1347,7 @@ class CompressDialog(QDialog):
                 self._ch_list.item(i).checkState() == Qt.Checked
                 for i in range(self._ch_list.count())
             )
-        self._btn_compress.setEnabled(any_ds and any_ch)
+        self._btn_compress.setEnabled(storage_ok and any_ds and any_ch)
 
     # ------------------------------------------------------------------
     # Styling

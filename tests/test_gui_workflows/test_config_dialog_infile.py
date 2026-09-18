@@ -68,3 +68,22 @@ def test_java_preflight_passes_without_infile_entries(monkeypatch):
     monkeypatch.setattr(cdlg, "_java_problem", lambda: "should not be asked")
     legacy = SimpleNamespace(compress_plan={"files": []})
     assert cdlg._infile_preflight([legacy]) is None
+
+
+def test_infile_pending_plan_carries_the_storage_choice(tmp_path):
+    from percell4.domain.io.projections import StorageChoice
+
+    scheme = ImportScheme(
+        sources=(_source(tmp_path / "f.tif", name="f"),),
+        storage=StorageChoice(("max",), keep_zseries=True),
+    )
+    cfg = SimpleNamespace(infile_scheme=scheme, output_dir=tmp_path, creation_bin=1)
+    (pending,) = cdlg._infile_pending_datasets(cfg)
+    assert pending.compress_plan["storage"] == ["max", "zseries"]
+
+    no_choice = SimpleNamespace(
+        infile_scheme=ImportScheme(sources=(_source(tmp_path / "f.tif", name="f"),)),
+        output_dir=tmp_path, creation_bin=1,
+    )
+    (pending,) = cdlg._infile_pending_datasets(no_choice)
+    assert "storage" not in pending.compress_plan

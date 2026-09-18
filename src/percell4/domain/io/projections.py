@@ -167,3 +167,31 @@ class StorageChoice:
         return ", ".join(
             "z-series" if t == ZSERIES_TOKEN else t for t in self.tokens
         )
+
+
+def estimate_storage_bytes(
+    choice: StorageChoice, n_t: int, n_c: int, n_z: int, height: int, width: int
+) -> tuple[int, int]:
+    """Uncompressed ``(z-series bytes, projection bytes)`` of one dataset.
+
+    Both are float32. The z-series is ``T x C x Z x H x W``; each kept
+    projection is ``T x C x H x W``.
+    """
+    plane = (max(1, n_t), max(1, n_c), int(height), int(width))
+    zseries = uncompressed_nbytes((*plane, max(1, n_z)), 4) if choice.keep_zseries else 0
+    projections = len(choice.projections) * uncompressed_nbytes(plane, 4)
+    return zseries, projections
+
+
+def format_bytes(n: int) -> str:
+    """``1234567`` -> ``"1.2 MB"`` (decimal units, as file browsers show)."""
+    value = float(n)
+    for unit in ("bytes", "kB", "MB", "GB"):
+        if value < 1000 or unit == "GB":
+            break
+        value /= 1000
+    if unit == "bytes":
+        return f"{int(value)} bytes"
+    if unit == "GB" and value >= 1000:
+        return f"{value / 1000:.1f} TB"
+    return f"{value:.1f} {unit}"

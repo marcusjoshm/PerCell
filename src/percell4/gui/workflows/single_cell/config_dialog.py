@@ -240,6 +240,14 @@ def _build_compress_plan(
         # silently ignored on the workflow path.
         "creation_bin": int(getattr(cfg, "creation_bin", 1)),
     }
+    # Storage choice (z-stack plan U4): absent keys replay as one projection
+    # by z_project_method, the behavior of plans saved before the choice.
+    storage = getattr(cfg, "storage", None)
+    if storage is not None:
+        plan["storage"] = list(storage.tokens)
+    z_step = getattr(cfg, "z_step_um", None)
+    if z_step:
+        plan["z_step_um"] = float(z_step)
 
     # Filename-token regexes. For a tokenless (name-suffixed) import this is
     # the pattern ``discover_tokenless`` synthesized inside the CompressDialog;
@@ -313,6 +321,11 @@ def _infile_pending_datasets(cfg: Any) -> list[_PendingDataset]:
                     "z_method": scheme.z_method,
                     "output_path": str(output),
                     "creation_bin": int(getattr(cfg, "creation_bin", 1)),
+                    **(
+                        {"storage": list(scheme.storage.tokens)}
+                        if scheme.storage is not None
+                        else {}
+                    ),
                 },
             )
         )

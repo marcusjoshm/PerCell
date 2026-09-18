@@ -34,9 +34,10 @@ from percell4.domain.io.infile import (
     with_z_method,
 )
 from percell4.domain.io.naming import channel_display_name
+from percell4.domain.io.projections import StorageChoice
 
 COLUMNS = ("Import", "Dataset", "Source", "Dimensions", "Calibration", "Channels", "Axes",
-           "Status")
+           "Keep", "Status")
 AXES_AS_READ = "As read"
 AXES_SWAPPED = "Swap Z and T"
 _SWAPPED = AxisMap(z="T", t="Z")
@@ -61,6 +62,17 @@ def calibration_text(source: ImportSource) -> str:
     return " · ".join(parts) or "none in file"
 
 
+def keep_text(source: ImportSource, storage: StorageChoice | None) -> str:
+    """What the import keeps from this source: the storage choice for a
+    z-stack, ``"as is (no Z)"`` for a single-plane source (R4)."""
+    s = source.effective
+    if s is None:
+        return "—"
+    if s.size_z <= 1:
+        return "as is (no Z)"
+    return storage.label if storage is not None else "—"
+
+
 def channel_label(index: int, metadata_names: tuple[str, ...]) -> str:
     name = channel_display_name(str(index))
     if index < len(metadata_names) and metadata_names[index]:
@@ -81,6 +93,7 @@ class InfileReviewTable(QWidget):
         super().__init__(parent)
         self._scheme = ImportScheme()
         self._note_rows: list[tuple[str, str]] = []
+        self._storage: StorageChoice | None = StorageChoice()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self._table = QTableWidget(0, len(COLUMNS))
@@ -114,6 +127,12 @@ class InfileReviewTable(QWidget):
         self._scheme = ImportScheme()
         self._note_rows = list(rows)
         self._rebuild()
+
+    def set_storage(self, storage: StorageChoice | None) -> None:
+        """Show what the import keeps in each source's Keep cell."""
+        self._storage = storage
+        for index, source in enumerate(self._scheme.sources):
+            self._text(index, "Keep", keep_text(source, storage))
 
     def set_z_method(self, z_method: str) -> None:
         """Adopt a new z method and refresh the z-count warnings."""
@@ -209,6 +228,7 @@ class InfileReviewTable(QWidget):
         include.blockSignals(False)
         self._text(row, "Dimensions", dims_text(source))
         self._text(row, "Calibration", calibration_text(source))
+        self._text(row, "Keep", keep_text(source, self._storage))
         self._status_cell(row, index, source)
 
     def _status_cell(self, row: int, index: int, source: ImportSource) -> None:
@@ -267,6 +287,7 @@ class InfileReviewTable(QWidget):
         axes.currentTextChanged.connect(lambda text, i=index: self._on_axes(i, text))
         self._table.setCellWidget(row, COLUMNS.index("Axes"), axes)
         self.axes_combos[index] = axes
+        self._text(row, "Keep", keep_text(source, self._storage))
 
         self._status_cell(row, index, source)
 
@@ -277,7 +298,7 @@ class InfileReviewTable(QWidget):
         self._table.setCellWidget(row, COLUMNS.index("Import"), include)
         self._text(row, "Dataset", "—")
         self._text(row, "Source", name)
-        for column in ("Dimensions", "Calibration"):
+        for column in ("Dimensions", "Calibration", "Keep"):
             self._text(row, column, "—")
         for column in ("Channels", "Axes"):
             self._table.setCellWidget(row, COLUMNS.index(column), None)

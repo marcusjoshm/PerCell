@@ -141,7 +141,7 @@ def test_plan_is_json_serializable(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "field",
-    ["token_config", "creation_bin", "flim_params", "tile_config"],
+    ["token_config", "creation_bin", "flim_params", "tile_config", "storage", "z_step_um"],
 )
 def test_parity_guard_every_import_shaping_field_is_serialized(
     tmp_path: Path, field: str
@@ -169,6 +169,8 @@ def test_parity_guard_every_import_shaping_field_is_serialized(
                 register=True,
                 reference_channel="ch00",
             ),
+            storage=_keep("max", "mean", "zseries"),
+            z_step_um=0.3,
         ),
         selected_token_ids=["00"],
         layer_assignments_payload={},
@@ -177,6 +179,45 @@ def test_parity_guard_every_import_shaping_field_is_serialized(
         f"{field} is collected by CompressConfig and consumed by "
         f"import_dataset, but never reaches the compress plan"
     )
+
+
+def _keep(*tokens):
+    from percell4.domain.io.projections import StorageChoice
+
+    return StorageChoice.parse(",".join(tokens))
+
+
+def test_plan_without_a_storage_choice_omits_the_keys(tmp_path: Path) -> None:
+    """No Z in the selection: the plan replays as before (R4)."""
+    plan = _build_compress_plan(
+        ds=_ds(tmp_path), gui_state=None, cfg=_cfg(storage=None, z_step_um=None),
+        selected_token_ids=["00"], layer_assignments_payload={},
+    )
+    assert "storage" not in plan and "z_step_um" not in plan
+
+
+def test_plan_storage_round_trips_to_import_dataset(tmp_path: Path) -> None:
+    import json
+    from unittest.mock import patch
+
+    from percell4.workflows.models import DatasetSource, WorkflowDatasetEntry
+    from percell4.workflows.phases import compress_one
+
+    plan = _build_compress_plan(
+        ds=_ds(tmp_path), gui_state=None,
+        cfg=_cfg(storage=_keep("mean", "zseries"), z_step_um=0.3),
+        selected_token_ids=["00"], layer_assignments_payload={},
+    )
+    plan = json.loads(json.dumps(plan))  # through run_config.json
+    entry = WorkflowDatasetEntry(
+        name="d", source=DatasetSource.TIFF_PENDING, h5_path=tmp_path / "d.h5",
+        channel_names=["ch00"], compress_plan=plan,
+    )
+    with patch("percell4.adapters.importer.import_dataset") as mock_import:
+        compress_one(entry)
+    kwargs = mock_import.call_args.kwargs
+    assert kwargs["storage"] == _keep("mean", "zseries")
+    assert kwargs["z_step_um"] == pytest.approx(0.3)
 
 
 def test_end_to_end_tokenless_workflow_compress(tmp_path: Path) -> None:
@@ -322,7 +363,10 @@ class _Host:
 
 @pytest.mark.parametrize(
     "field",
-    ["token_config", "creation_bin", "flim_params", "tile_config", "z_project_method"],
+    [
+        "token_config", "creation_bin", "flim_params", "tile_config", "z_project_method",
+        "storage", "z_step_um",
+    ],
 )
 def test_run_batch_compress_forwards_every_import_shaping_field(
     tmp_path: Path, monkeypatch, field: str
@@ -342,6 +386,8 @@ def test_run_batch_compress_forwards_every_import_shaping_field(
         "flim_params": {"frequency_mhz": 80.0},
         "tile_config": SimpleNamespace(grid_rows=2),
         "z_project_method": "sum",
+        "storage": _keep("max", "zseries"),
+        "z_step_um": 0.3,
     }
     config = CompressConfig(**values)
     with patch("percell4.adapters.importer.import_dataset") as mock_import:
@@ -365,7 +411,9 @@ def test_run_infile_import_forwards_z_method_and_creation_bin(tmp_path: Path, mo
                           series=SeriesProbe(index=0, size_c=1, size_z=3))
     config = CompressConfig(
         creation_bin=3, output_dir=tmp_path,
-        infile_scheme=ImportScheme(z_method="mean", sources=(source,)),
+        infile_scheme=ImportScheme(
+            z_method="mean", sources=(source,), storage=_keep("mean", "zseries")
+        ),
     )
     with patch("percell4.adapters.importer.import_infile_dataset") as mock_import:
         mw.LauncherWindow._run_infile_import(_Host(), config, reader=object())
@@ -373,3 +421,4 @@ def test_run_infile_import_forwards_z_method_and_creation_bin(tmp_path: Path, mo
     kwargs = mock_import.call_args.kwargs
     assert kwargs["z_method"] == "mean"
     assert kwargs["creation_bin"] == 3
+    assert kwargs["storage"] == _keep("mean", "zseries")

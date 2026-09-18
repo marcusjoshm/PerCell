@@ -513,6 +513,24 @@ def with_z_method(scheme: ImportScheme, z_method: str) -> ImportScheme:
     )
 
 
+def with_storage(scheme: ImportScheme, storage: StorageChoice) -> ImportScheme:
+    """``scheme`` keeping ``storage``, with its z-count notes recomputed.
+
+    The scheme's ``z_method`` follows the choice so the notes match it: sum
+    when a sum projection is kept (its intensities scale with z-count), else
+    the first kept projection, else the scheme's own.
+    """
+    from percell4.domain.io.projections import method_for_projection
+
+    if "sum" in storage.projections:
+        z_method = "sum"
+    elif storage.projections:
+        z_method = method_for_projection(storage.projections[0])
+    else:
+        z_method = scheme.z_method
+    return replace(with_z_method(scheme, z_method), storage=storage)
+
+
 def suggest_scheme(probes: Iterable[FileProbe], z_method: str = "mip") -> ImportScheme:
     """Turn reader probes into a suggested :class:`ImportScheme`.
 

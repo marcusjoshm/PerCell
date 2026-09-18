@@ -193,3 +193,70 @@ def test_percell_import_is_listed_as_a_batch_tool():
     if "percell-import" not in names:
         pytest.skip("entry points not refreshed; run `pip install -e .`")
     assert "percell-import" in names
+
+
+# ── --keep / --z-step (z-stack plan U4) ───────────────────────
+
+
+def test_keep_imports_every_kept_choice(folder, fake_reader, tmp_path, capsys):
+    src, *_ = folder
+    outdir = tmp_path / "out"
+
+    rc = cli.main([str(src), "--output-dir", str(outdir), "--keep", "max,mean,zseries"])
+
+    assert rc == 0
+    assert "Keep: max, mean, z-series" in capsys.readouterr().out
+    store = DatasetStore(outdir / "a.h5")
+    assert store.list_projections() == ("max", "mean")
+    assert store.zseries_shape() == (2, 3, 8, 8)
+
+
+def test_keep_zseries_alone_makes_a_view_only_dataset(folder, fake_reader, tmp_path):
+    src, *_ = folder
+    outdir = tmp_path / "out"
+    assert cli.main([str(src), "--output-dir", str(outdir), "--keep", "zseries"]) == 0
+    store = DatasetStore(outdir / "a.h5")
+    assert store.list_projections() == ()
+    assert store.has_zseries()
+
+
+def test_keep_rejects_unknown_values(folder, fake_reader, capsys):
+    src, *_ = folder
+    with pytest.raises(SystemExit) as exc:
+        cli.main([str(src), "--scan-only", "--keep", "max,median"])
+    assert exc.value.code == 2
+    assert "median" in capsys.readouterr().err
+
+
+def test_keep_is_written_to_the_scheme_file(folder, fake_reader, tmp_path):
+    src, *_ = folder
+    out = tmp_path / "s.json"
+    cli.main([str(src), "--scan-only", "--keep", "sum,zseries", "--scheme-out", str(out)])
+    scheme = scheme_json.loads(out.read_text())
+    assert scheme.storage.tokens == ("sum", "zseries")
+    assert any("not comparable" in w for w in scheme.warnings) or scheme.z_method == "sum"
+
+
+def test_z_step_fills_in_a_missing_z_spacing(tmp_path, monkeypatch):
+    path = tmp_path / "raw" / "c.tif"
+    path.parent.mkdir()
+    stack = np.ones((1, 1, 3, 8, 8), dtype=np.uint16)
+    _hyperstack(path, stack)
+    st = path.stat()
+    probe = probe_for(path, stack, physical_z_um=None)
+    probe = probe.__class__(**{**probe.__dict__, "size_bytes": st.st_size,
+                               "mtime_ns": st.st_mtime_ns})
+    reader = FakeImageReader([probe], arrays={(path, 0): stack})
+    monkeypatch.setattr(cli, "_make_reader", lambda: reader)
+    from dataclasses import replace
+
+    from percell4.domain.io.infile import confirm_source
+
+    scheme = scan_selection([path], reader_factory=lambda: reader).scheme
+    scheme = replace(scheme, sources=tuple(confirm_source(s) for s in scheme.sources))
+    scheme_path = tmp_path / "s.json"
+    scheme_path.write_text(scheme_json.dumps(scheme))
+    outdir = tmp_path / "out"
+    rc = cli.main(["--scheme", str(scheme_path), "--output-dir", str(outdir), "--z-step", "0.3"])
+    assert rc == 0
+    assert DatasetStore(outdir / "c.h5").metadata["z_spacing_um"] == pytest.approx(0.3)

@@ -127,3 +127,29 @@ def test_legacy_none_projection_fails_with_a_named_reason(tmp_path):
     assert not legacy.called
     assert failure is DatasetFailure.COMPRESS_FAILED
     assert "z_project_method" in msg and "none" in msg
+
+
+def test_plan_storage_keeps_a_zseries_on_replay(tmp_path, fake_shared_reader):
+    entry, pair, probe = _infile_entry(tmp_path, "a")
+    entry.compress_plan["storage"] = ["max", "mean", "zseries"]
+    fake_shared_reader([pair], [probe])
+
+    updated, failure, _ = compress_one(entry)
+
+    assert failure is None
+    store = DatasetStore(updated.h5_path)
+    assert store.list_projections() == ("max", "mean")
+    assert store.zseries_shape() == (2, 3, 8, 8)
+
+
+def test_plan_saved_before_the_choice_replays_one_projection(tmp_path, fake_shared_reader):
+    entry, pair, probe = _infile_entry(tmp_path, "a")
+    entry.compress_plan["z_method"] = "mean"
+    fake_shared_reader([pair], [probe])
+
+    updated, failure, _ = compress_one(entry)
+
+    assert failure is None
+    store = DatasetStore(updated.h5_path)
+    assert store.list_projections() == ("mean",)
+    assert not store.has_zseries()

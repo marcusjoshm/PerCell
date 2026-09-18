@@ -9,6 +9,7 @@ Usage:
     percell-import /data/stacks/ --scan-only --scheme-out scheme.json
     percell-import --scheme scheme.json --output-dir /data/h5/
     percell-import stack_01.tif stack_02.tif --output-dir /data/h5/ --z-method mean
+    percell-import stack.tif --output-dir /data/h5/ --keep max,mean,zseries
 
 Single-plane files are listed as excluded; import them with the Flat or
 Subdirectory mode of the import dialog. A source whose axes are ambiguous
@@ -44,8 +45,9 @@ from percell4.domain.errors import (
     PercellError,
 )
 from percell4.domain.io import scheme_json
-from percell4.domain.io.infile import Z_METHODS, ImportScheme, ImportSource
+from percell4.domain.io.infile import Z_METHODS, ImportScheme, ImportSource, with_storage
 from percell4.domain.io.models import DiscoveryMode
+from percell4.domain.io.projections import StorageChoice
 
 
 def _make_reader():
@@ -74,7 +76,7 @@ def _describe(src: ImportSource) -> str:
 
 
 def _print_scheme(scheme: ImportScheme) -> None:
-    print(f"Z projection: {scheme.z_method}")
+    print(f"Keep: {scheme.storage_choice.label}")
     print(f"Sources ({len(scheme.sources)}):")
     for src in scheme.sources:
         mark = "+" if src.importable else "?"
@@ -101,7 +103,11 @@ def _scan(sources: list[str], z_method: str) -> ImportScheme | None:
 
 
 def _import_all(
-    scheme: ImportScheme, output_dir: Path, overwrite: bool, as_json: bool
+    scheme: ImportScheme,
+    output_dir: Path,
+    overwrite: bool,
+    as_json: bool,
+    z_step_um: float | None = None,
 ) -> tuple[int, list[str]]:
     """Import every included source. Returns (exit code, written paths)."""
     from percell4.adapters.importer import import_infile_dataset
@@ -137,7 +143,7 @@ def _import_all(
             try:
                 import_infile_dataset(
                     src, target, reader, z_method=scheme.z_method, output_dir=output_dir,
-                    storage=scheme.storage,
+                    storage=scheme.storage, z_step_um=z_step_um,
                 )
             except PercellError as exc:
                 failed += 1
@@ -153,6 +159,13 @@ def _import_all(
     return (1 if failed else 0), written
 
 
+def _keep_arg(text: str) -> StorageChoice:
+    try:
+        return StorageChoice.parse(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
     parser = argparse.ArgumentParser(
@@ -160,7 +173,8 @@ def main(argv: list[str] | None = None) -> int:
         description=(
             "Import multi-dimensional microscopy files (channels, z and time "
             "inside one file) through Bio-Formats. Each file series becomes "
-            "one .h5 dataset. Z is always projected (max, mean or sum)."
+            "one .h5 dataset. --keep chooses what to store from each z-stack: "
+            "max, mean and sum projections and/or the full z-series."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -168,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
             "  percell-import /data/stacks/ --scan-only --scheme-out scheme.json\n"
             "  percell-import --scheme scheme.json --output-dir /data/h5/\n"
             "  percell-import stack.tif --output-dir /data/h5/ --z-method mean\n"
+            "  percell-import stack.tif --output-dir /data/h5/ --keep max,zseries\n"
         ),
     )
     parser.add_argument(
@@ -184,7 +199,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--z-method", choices=Z_METHODS, default="mip",
-        help="Z projection for a scan (default mip). A scheme file keeps its own.",
+        help="Z projection for a scan (default mip). A scheme file keeps its own. "
+        "Ignored when --keep is given.",
+    )
+    parser.add_argument(
+        "--keep", type=_keep_arg, default=None, metavar="LIST",
+        help="What to store from each z-stack, comma-separated: any of max, mean, "
+        "sum and zseries (the full z-series, float32, about 4 bytes per voxel). "
+        "Default: the --z-method projection only. Overrides a scheme file's own "
+        "choice. 'zseries' alone makes a view-only dataset until a projection "
+        "is added. Files without a Z axis ignore it.",
+    )
+    parser.add_argument(
+        "--z-step", type=float, default=None, metavar="UM",
+        help="Z step in µm to record when a file carries none.",
     )
     parser.add_argument(
         "--overwrite", action="store_true", help="Replace existing .h5 outputs as a whole."
@@ -210,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
             scheme = scheme_json.loads(args.scheme.read_text())
         else:
             scheme = _scan(args.sources, args.z_method)
+        if args.keep is not None:
+            scheme = with_storage(scheme, args.keep)
     except (JavaUnavailableError, BioformatsUnavailableError) as exc:
         _err(str(exc))
         _err("run again with --provision-java, or set java_home in the advanced settings")
@@ -231,7 +261,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.json:
         _print_scheme(scheme)
     output_dir: Path = args.output_dir
-    code, written = _import_all(scheme, output_dir, args.overwrite, args.json)
+    code, written = _import_all(
+        scheme, output_dir, args.overwrite, args.json, z_step_um=args.z_step
+    )
     if args.json:
         record = scheme_json.to_dict(scheme)
         record["imported"] = written

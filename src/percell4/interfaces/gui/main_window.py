@@ -1206,6 +1206,8 @@ class LauncherWindow(QMainWindow):
                     # None when the FLIM group is unchecked, so non-FLIM
                     # imports are unaffected.
                     flim_params=config.flim_params,
+                    storage=config.storage,
+                    z_step_um=config.z_step_um,
                 )
                 completed.append(display_name)
             except Exception as e:
@@ -1329,6 +1331,7 @@ class LauncherWindow(QMainWindow):
                     reader,
                     z_method=z_method,
                     creation_bin=config.creation_bin,
+                    storage=config.infile_scheme.storage,
                     on_plane=on_plane,
                     is_cancelled=progress.wasCanceled,
                 )

@@ -233,21 +233,24 @@ def test_changing_the_selection_mid_probe_discards_the_stale_result(
     assert dlg._review.scheme().sources == ()
 
 
-def test_z_combo_offers_only_projections(make_dialog):
+def test_keep_offers_the_projections_and_the_zseries(make_dialog):
     dlg = make_dialog()
-    items = [dlg._z_combo.itemText(i) for i in range(dlg._z_combo.count())]
-    assert items == ["mip", "mean", "sum"]
+    form = dlg._storage_form
+    assert list(form.projection_boxes) == ["max", "mean", "sum"]
+    assert [b.isChecked() for b in form.projection_boxes.values()] == [True, False, False]
+    assert not form.zseries_box.isChecked()
 
 
-def test_config_carries_the_z_method_and_sum_warning(tmp_path, make_dialog, monkeypatch):
+def test_config_carries_the_storage_and_sum_warning(tmp_path, make_dialog, monkeypatch):
     pairs = [(_hyperstack(tmp_path / f"s{i}.tif", _stack(z=z, seed=i)), _stack(z=z, seed=i))
              for i, z in enumerate((3, 5))]
     dlg = make_dialog(reader=_fake_for(pairs))
     _select_files(dlg, monkeypatch, [p for p, _ in pairs])
 
-    dlg._z_combo.setCurrentText("sum")
+    dlg._storage_form.projection_boxes["sum"].setChecked(True)
 
     scheme = dlg.compress_config.infile_scheme
+    assert scheme.storage.projections == ("max", "sum")
     assert scheme.z_method == "sum"
     assert any("summed intensities" in w for w in scheme.warnings)
     assert dlg.compress_config.datasets == []

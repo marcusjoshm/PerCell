@@ -197,6 +197,7 @@ def compress_one(
         # binning), keeping existing single-cell runs byte-identical
         # apart from the two new /metadata keys.
         creation_bin = int(plan.get("creation_bin", 1))
+        z_step = plan.get("z_step_um")
         import_dataset(
             source_dir=source_dir or str(output_path.parent),
             output_h5=output_path,
@@ -208,6 +209,8 @@ def compress_one(
             creation_bin=creation_bin,
             tile_config=tile_config,
             flim_params=plan.get("flim_params"),
+            storage=_storage_from_plan(plan),
+            z_step_um=float(z_step) if z_step else None,
         )
     except Exception as e:
         logger.exception("compress_one failed for %s", entry.name)
@@ -227,6 +230,17 @@ def compress_one(
     return updated, None, ""
 
 
+def _storage_from_plan(plan: dict[str, Any]):
+    """The plan's storage choice, or None for a plan saved before it existed
+    (one projection by its z method, exactly as before)."""
+    keep = plan.get("storage")
+    if not keep:
+        return None
+    from percell4.domain.io.projections import StorageChoice
+
+    return StorageChoice.parse(",".join(keep))
+
+
 def _compress_infile(
     entry: WorkflowDatasetEntry, plan: dict[str, Any]
 ) -> tuple[WorkflowDatasetEntry, DatasetFailure | None, str]:
@@ -244,6 +258,7 @@ def _compress_infile(
             infile_scan.shared_reader(),
             z_method=plan.get("z_method", "mip"),
             creation_bin=int(plan.get("creation_bin", 1)),
+            storage=_storage_from_plan(plan),
         )
     except Exception as e:
         logger.exception("compress_one (in-file) failed for %s", entry.name)

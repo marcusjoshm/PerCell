@@ -1137,6 +1137,7 @@ def import_infile_dataset(
     is_cancelled: Callable[[], bool] | None = None,
     output_dir: str | Path | None = None,
     storage: StorageChoice | None = None,
+    z_step_um: float | None = None,
 ) -> int:
     """Import one in-file source (a file's series) into a new ``.h5``.
 
@@ -1223,6 +1224,9 @@ def import_infile_dataset(
         all_metadata["pixel_size_um"] = float(series.physical_x_um) * int(creation_bin)
     if series.physical_z_um is not None and series.physical_z_um > 0:
         all_metadata["z_spacing_um"] = float(series.physical_z_um)
+    elif has_z and z_step_um is not None and z_step_um > 0:
+        # The file records no z step: use the user's value (KTD8).
+        all_metadata["z_spacing_um"] = float(z_step_um)
     if metadata:
         all_metadata.update(metadata)
 
