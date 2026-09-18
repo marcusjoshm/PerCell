@@ -710,6 +710,10 @@ class WorkflowConfig:
     # ``_measure_round_specs_for``).
     use_existing_masks: bool = False
     existing_mask_selections: dict[str, list[str]] = field(default_factory=dict)
+    # The z-projection every phase reads intensity from (KTD6). ``None`` is
+    # "not given": each dataset reads max when it holds it, else its only
+    # projection. A run_config.json without the key loads as ``None``.
+    projection: str | None = None
 
     def __post_init__(self) -> None:
         if not self.datasets:

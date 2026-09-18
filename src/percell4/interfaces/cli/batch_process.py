@@ -57,6 +57,7 @@ from percell4.application.use_cases.batch_process_datasets import (
     DatasetSpec,
     batch_process_datasets,
 )
+from percell4.interfaces.cli._projection_option import add_projection_option
 from percell4.io.paths import is_sidecar, scan_files
 
 logger = logging.getLogger(__name__)
@@ -221,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Enable debug logging.")
 
+    add_projection_option(parser)
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
 
@@ -286,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_segmentation=args.skip_segmentation,
         track=not args.no_track,
         progress_callback=_progress,
+        projection=args.projection,
     )
 
     print(

@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from percell4.workflows.run_log import RunLog
 
 from percell4.adapters.cellpose import run_cellpose
+from percell4.domain.errors import ProjectionRequiredError
 from percell4.domain.measure.grouper import GroupingResult, group_cells_gmm, group_cells_kmeans
 from percell4.domain.measure.measurer import measure_cells, measure_multichannel_with_masks
 from percell4.domain.measure.metrics import BUILTIN_METRICS
@@ -724,6 +725,8 @@ def threshold_compute_one(
                 labels = store.read_labels(seg_name, timepoint=t)
             except KeyError as e:
                 return None, DatasetFailure.THRESHOLD_ERROR, f"missing h5 key: {e}"
+            except ProjectionRequiredError as e:
+                return None, DatasetFailure.THRESHOLD_ERROR, str(e)
             grouping, _failure, _msg = _group_image_labels(image, labels, round_spec)
             if grouping is not None:
                 per_frame[t] = grouping
@@ -736,6 +739,8 @@ def threshold_compute_one(
         labels = store.read_labels(seg_name)
     except KeyError as e:
         return None, DatasetFailure.THRESHOLD_ERROR, f"missing h5 key: {e}"
+    except ProjectionRequiredError as e:
+        return None, DatasetFailure.THRESHOLD_ERROR, str(e)
     return _group_image_labels(image, labels, round_spec)
 
 

@@ -95,6 +95,7 @@ class SegmentationQCController(QObject):
         on_complete: Callable[[PhaseResult], None],
         channel_idx: int = 0,
         seg_name: str = "cellpose_qc",
+        projection: str | None = None,
         cellpose_settings=None,
         edge_mode=None,
         edge_margin_px: int = 0,
@@ -102,6 +103,8 @@ class SegmentationQCController(QObject):
         super().__init__()
         self._viewer_win = viewer_win
         self._entry = entry
+        # The run's z-projection (WorkflowConfig.projection).
+        self._projection = projection
         self._queue_index = queue_index
         self._queue_total = queue_total
         self._on_complete = on_complete
@@ -215,7 +218,7 @@ class SegmentationQCController(QObject):
             pass
 
         try:
-            self._store = DatasetStore(self._entry.h5_path)
+            self._store = DatasetStore(self._entry.h5_path, projection=self._projection)
             n_timepoints = int(self._store.metadata.get("n_timepoints", 1) or 1)
             if n_timepoints > 1:
                 # Time-lapse: read the seg channel as a (T,H,W) stack via the

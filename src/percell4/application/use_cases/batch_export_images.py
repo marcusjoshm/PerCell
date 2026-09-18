@@ -145,6 +145,7 @@ def batch_export_images(
     overwrite: bool = True,
     view_bin: int = 1,
     progress_callback: Callable[[BatchExportItemResult], None] | None = None,
+    projection: str | None = None,
 ) -> BatchExportReport:
     """Export every channel, label, and mask from each ``.h5`` to TIFFs.
 
@@ -171,6 +172,9 @@ def batch_export_images(
             for /masks), producing downsampled TIFFs.
         progress_callback: Invoked once per dataset after its
             :class:`BatchExportItemResult` is classified.
+        projection: The z-projection intensity channels are exported from
+            (``None``: max, else the dataset's only projection). A dataset
+            that cannot resolve it fails with the reason.
 
     Returns:
         A :class:`BatchExportReport` with one item per input path.
@@ -179,7 +183,7 @@ def batch_export_images(
     # warning by referencing the kwarg explicitly.
     _ = overwrite
 
-    repo = Hdf5DatasetRepository()
+    repo = Hdf5DatasetRepository(projection=projection)
     export_uc = ExportImages(repo)
     results: list[BatchExportItemResult] = []
 
@@ -216,7 +220,7 @@ def _process_one_dataset(
             error=f"open failed: {exc}",
         )
 
-    store = DatasetStore(h5_path)
+    store = DatasetStore(h5_path, projection=repo.projection)
 
     try:
         # Read intensity shape via h5py directly (bin-independent --
@@ -225,9 +229,10 @@ def _process_one_dataset(
         # honor the requested view_bin).
         import h5py
 
+        intensity_path = store.resolved_intensity_path()
         with h5py.File(h5_path, "r") as f:
             intensity_shape: tuple[int, ...] | None = (
-                tuple(f["intensity"].shape) if "intensity" in f else None
+                tuple(f[intensity_path].shape) if intensity_path in f else None
             )
         channel_names = list(handle.metadata.get("channel_names", []))
         n_timepoints = int(handle.metadata.get("n_timepoints", 1) or 1)

@@ -65,6 +65,7 @@ percell-batch-cellpose-laptrack SOURCES [--output-dir DIR] [options]
 | `--no-track` | Skip tracking even for time-lapse datasets. |
 | `--quiet` | Suppress per-dataset progress lines. |
 | `--verbose`, `-v` | Enable DEBUG logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 The Cellpose defaults match the GUI Segment tab with two exceptions, so pass them explicitly when you want a headless run to reproduce an interactive one: `--cellpose-diameter` defaults to `30`, where the GUI Segment tab seeds `300`; and `--gpu` is off unless passed, where the GUI's **Use GPU** checkbox starts checked.
 
@@ -100,6 +101,7 @@ percell-batch-export PATHS --output-dir DIR [options]
 | `--quiet` | Suppress per-dataset error detail lines. Per-dataset status headers and final totals always print. |
 | `--view-bin N` | Bin factor applied to every layer at read time. Default `1` (native resolution — the established export contract). `N > 1` produces downsampled TIFFs using the same lens the GUI applies for `view_bin=N` (`sum_bin_2d` for intensity, `mode_labels` for `/labels`, `majority_vote_mask` for `/masks`). Output filenames are unchanged regardless of bin — track the value yourself (e.g. `--output-dir out_bin4/`) if you mix runs. |
 | `--verbose`, `-v` | Enable DEBUG logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 
@@ -396,6 +398,7 @@ percell-batch-threshold DATASETS --round-name ROUND_NAME --channel CHANNEL \
 | `--segmentation SEGMENTATION` | Existing `/labels` layer to group against. Auto-picked per dataset if omitted. |
 | `--overwrite` | Overwrite an existing `/masks/<round>` instead of erroring. |
 | `--verbose` | Verbose logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 
@@ -447,6 +450,7 @@ percell-batch-measure DATASETS... [--segmentation SEGMENTATION] [--mask MASKS] \
 | `--csv-preset {default,all}` | CSV columns: `default` (area/integrated/mean + count/total-area/mean-intensity) or `all` (every metric). |
 | `--output OUTPUT` | Parent directory for the timestamped run folder (default cwd). A new `run_<timestamp>_<id>/` subfolder is always created beneath it. |
 | `--verbose` | Verbose logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 
@@ -593,6 +597,7 @@ percell-batch-validate-puncta DATASET --gt-dir DIR --channel CHANNEL [options]
 | `--beta BETA` | F-beta beta (recall weight). Default: `2.0`. |
 | `--out OUT` | Write the locked `PunctaDetectorSettings` JSON here when a method locks. |
 | `--verbose`, `-v` | Enable DEBUG logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 
@@ -639,6 +644,7 @@ percell-window-bakeoff DATASETS --channel CHANNEL [options]
 | `--c C` | Override the `granule-size` finder's multiplier `c` — the calibration knob. |
 | `--out OUT` | Write the full report (oracles, IoU/recall curves, per-field scores, ranking) as JSON to this path. |
 | `--verbose`, `-v` | Enable DEBUG logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 

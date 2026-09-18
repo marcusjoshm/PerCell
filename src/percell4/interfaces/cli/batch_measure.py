@@ -34,6 +34,7 @@ from datetime import datetime
 from pathlib import Path
 
 from percell4.interfaces.cli._batch_report import resolve_paths
+from percell4.interfaces.cli._projection_option import add_projection_option
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         "A new run_<timestamp>_<id>/ subfolder is always created beneath it.",
     )
     parser.add_argument("--verbose", action="store_true", help="Verbose logging.")
+    add_projection_option(parser)
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
 
@@ -294,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
 
     n_ok = 0
     for entry in entries:
-        store = DatasetStore(entry.h5_path)
+        store = DatasetStore(entry.h5_path, projection=args.projection)
         specs = _specs_for(entry.name, entry.channel_names)
         if not specs:
             continue

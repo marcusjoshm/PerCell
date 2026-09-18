@@ -79,10 +79,13 @@ class ThresholdQCQueueEntry:
         queue_total: int,
         on_complete: Callable[[PhaseResult], None],
         seg_name: str = "cellpose_qc",
+        projection: str | None = None,
     ) -> None:
         self._viewer_win = viewer_win
         self._data_model = data_model
         self._entry = entry
+        # The run's z-projection (WorkflowConfig.projection).
+        self._projection = projection
         self._round_spec = round_spec
         self._grouping_result = grouping_result
         self._queue_index = queue_index
@@ -121,7 +124,7 @@ class ThresholdQCQueueEntry:
             pass
 
         try:
-            self._store = DatasetStore(self._entry.h5_path)
+            self._store = DatasetStore(self._entry.h5_path, projection=self._projection)
             channel_idx = _channel_index(self._store, self._round_spec.channel)
             channel_image = self._store.read_channel("intensity", channel_idx)
             seg_labels = self._store.read_labels(self._seg_name)
@@ -263,10 +266,13 @@ class TimelapseThresholdQCQueueEntry:
         queue_total: int,
         on_complete: Callable[[PhaseResult], None],
         seg_name: str = "cellpose_qc",
+        projection: str | None = None,
     ) -> None:
         self._viewer_win = viewer_win
         self._data_model = data_model
         self._entry = entry
+        # The run's z-projection (WorkflowConfig.projection).
+        self._projection = projection
         self._round_spec = round_spec
         self._grouping_by_timepoint = grouping_by_timepoint
         self._queue_index = queue_index
@@ -287,7 +293,7 @@ class TimelapseThresholdQCQueueEntry:
     def start(self) -> None:
         """Open the dataset and begin QC at the first timepoint."""
         try:
-            self._store = DatasetStore(self._entry.h5_path)
+            self._store = DatasetStore(self._entry.h5_path, projection=self._projection)
             self._channel_idx = _channel_index(self._store, self._round_spec.channel)
             self._n_timepoints = int(
                 self._store.metadata.get("n_timepoints", 1) or 1

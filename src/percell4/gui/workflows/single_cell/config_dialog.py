@@ -619,6 +619,21 @@ class WorkflowConfigDialog(QDialog):
         btn_row.addStretch()
         outer.addLayout(btn_row)
 
+        # Projection every phase of the run reads intensity from (KTD6).
+        proj_row = QHBoxLayout()
+        proj_row.addWidget(QLabel("Projection:"))
+        self._projection_combo = QComboBox()
+        self._projection_combo.setToolTip(
+            "The z-projection every phase reads intensity from. Offers the "
+            "projections this run's imports keep and those its .h5 datasets "
+            "hold. Datasets imported before projections were named read their "
+            "one image whatever is chosen."
+        )
+        proj_row.addWidget(self._projection_combo)
+        proj_row.addStretch()
+        outer.addLayout(proj_row)
+        self._refresh_projection_choice()
+
         # Status line for dedupe toasts, validation hints, etc.
         self._dataset_status = QLabel("")
         self._dataset_status.setStyleSheet("color: #888;")
@@ -1878,6 +1893,59 @@ class WorkflowConfigDialog(QDialog):
         # Keep the segmentation + mask pickers in sync with the dataset queue.
         self._refresh_segmentation_picker()
         self._refresh_mask_picker()
+        self._refresh_projection_choice()
+
+    def _projection_sources(self) -> tuple[list[str], list[str]]:
+        """``(projections on offer, names of datasets holding only a z-series)``.
+
+        A pending import offers the projections its storage choice keeps (a
+        plan without one imports into /intensity, which reads whatever is
+        chosen); an existing ``.h5`` offers its named projections.
+        """
+        from percell4.domain.io.projections import StorageChoice, ordered_projections
+
+        offered: set[str] = set()
+        zseries_only: list[str] = []
+        for pd in self._pending_datasets:
+            if pd.source is DatasetSource.H5_EXISTING:
+                try:
+                    store = DatasetStore(pd.h5_path)
+                    names = store.named_projections()
+                    if not names and not store.list_projections() and store.has_zseries():
+                        zseries_only.append(pd.display_name)
+                except Exception:  # noqa: BLE001 - an unreadable file offers nothing
+                    names = ()
+                offered.update(names)
+                continue
+            keep = (pd.compress_plan or {}).get("storage")
+            if keep:
+                choice = StorageChoice.parse(",".join(keep))
+                offered.update(choice.projections)
+                if not choice.projections:
+                    zseries_only.append(pd.display_name)
+        return list(ordered_projections(offered)), zseries_only
+
+    def _refresh_projection_choice(self) -> None:
+        """Offer the run's projections, seeded from the Session when possible."""
+        from percell4.domain.io.projections import pick_projection
+        from percell4.gui.analysis_widgets import session_projection
+
+        combo = self._projection_combo
+        current = combo.currentData()
+        offered, _zseries_only = self._projection_sources()
+        combo.blockSignals(True)
+        combo.clear()
+        if not offered:
+            combo.addItem("default (max, else each dataset's only projection)", None)
+        for name in offered:
+            combo.addItem(name, name)
+        seed = current if current in offered else session_projection(self.parent())
+        if seed not in offered:
+            seed = pick_projection(offered)
+        if seed is not None:
+            combo.setCurrentIndex(combo.findData(seed))
+        combo.setEnabled(len(offered) > 1)
+        combo.blockSignals(False)
 
     def _toast_add_result(self, added: int, skipped: list[str]) -> None:
         parts: list[str] = []
@@ -2328,6 +2396,16 @@ class WorkflowConfigDialog(QDialog):
             self._warn(java_problem)
             return None
 
+        _offered, zseries_only = self._projection_sources()
+        if zseries_only:
+            self._warn(
+                "These datasets keep only a z-series, which is for viewing: "
+                + ", ".join(zseries_only)
+                + ". Keep a projection in their import (or add one to the "
+                ".h5), or remove them from the run."
+            )
+            return None
+
         use_existing_masks = self._mask_selection_group.isChecked()
         if not use_existing_masks and len(self._round_cards) == 0:
             self._warn(
@@ -2497,6 +2575,7 @@ class WorkflowConfigDialog(QDialog):
                 ),
                 use_existing_masks=use_existing_masks,
                 existing_mask_selections=existing_mask_selections,
+                projection=self._projection_combo.currentData(),
             )
         except ValueError as e:
             self._warn(f"Configuration invalid: {e}")

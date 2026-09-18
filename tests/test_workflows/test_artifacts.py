@@ -908,3 +908,21 @@ def test_cellpose_from_dict_coerces_unknown_model(recwarn):
 def test_cellpose_from_dict_keeps_valid_model():
     """A still-valid model name round-trips unchanged."""
     assert _cellpose_from_dict({"model": "cpdino"}).model == "cpdino"
+
+
+# ── projection (z-stack plan U6) ──────────────────────────────
+
+
+def test_config_projection_round_trips() -> None:
+    from dataclasses import replace
+
+    cfg = replace(_sample_config(), projection="mean")
+    data = config_to_dict(cfg)
+    assert data["projection"] == "mean"
+    assert config_from_dict(data).projection == "mean"
+
+
+def test_config_without_projection_key_loads_as_not_given() -> None:
+    data = config_to_dict(_sample_config())
+    del data["projection"]
+    assert config_from_dict(data).projection is None

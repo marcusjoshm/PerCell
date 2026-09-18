@@ -1252,3 +1252,78 @@ def test_grouped_otsu_um2_min_size_flagged_by_preflight(dialog, tmp_path, monkey
     cfg = dialog._try_build_config()
     assert cfg is None  # blocked despite being a Grouped Otsu round
     assert any("pixel size" in w for w in warnings)
+
+
+# ── Projection choice (z-stack plan U6) ─────────────────────────────
+
+
+def _pending_import(name, keep):
+    from percell4.gui.workflows.single_cell.config_dialog import _PendingDataset
+    from percell4.workflows.models import DatasetSource
+
+    plan = {"source_dir": f"/tmp/{name}", "files": [f"/tmp/{name}/a.tif"]}
+    if keep is not None:
+        plan["storage"] = list(keep)
+    return _PendingDataset(
+        display_name=name, source=DatasetSource.TIFF_PENDING,
+        h5_path=Path(f"/tmp/{name}.h5"), channel_names=["GFP"], compress_plan=plan,
+    )
+
+
+def _projection_items(dlg):
+    combo = dlg._projection_combo
+    return [combo.itemData(i) for i in range(combo.count())]
+
+
+def test_import_keeping_mean_only_offers_only_mean(qtbot, monkeypatch):
+    from types import SimpleNamespace
+
+    from percell4.gui.workflows.single_cell import config_dialog as cdlg
+
+    session = SimpleNamespace(active_projection="max")
+    parent = SimpleNamespace(data_model=SimpleNamespace(session=session))
+    monkeypatch.setattr(cdlg.WorkflowConfigDialog, "parent", lambda self: parent)
+    dlg = WorkflowConfigDialog()
+    qtbot.addWidget(dlg)
+    dlg._add_pending(_pending_import("A", ["mean", "zseries"]))
+    dlg._refresh_dataset_tree()
+    assert _projection_items(dlg) == ["mean"]
+    assert dlg._projection_combo.currentData() == "mean"
+
+
+def test_session_projection_seeds_when_offered(qtbot, monkeypatch):
+    from types import SimpleNamespace
+
+    from percell4.gui.workflows.single_cell import config_dialog as cdlg
+
+    session = SimpleNamespace(active_projection="sum")
+    parent = SimpleNamespace(data_model=SimpleNamespace(session=session))
+    monkeypatch.setattr(cdlg.WorkflowConfigDialog, "parent", lambda self: parent)
+    dlg = WorkflowConfigDialog()
+    qtbot.addWidget(dlg)
+    dlg._add_pending(_pending_import("A", ["max", "sum"]))
+    dlg._refresh_dataset_tree()
+    assert _projection_items(dlg) == ["max", "sum"]
+    assert dlg._projection_combo.currentData() == "sum"
+
+
+def test_legacy_only_runs_offer_the_default(dialog, h5_ds1):
+    from percell4.gui.workflows.single_cell.config_dialog import _PendingDataset
+    from percell4.workflows.models import DatasetSource
+
+    dialog._add_pending(_PendingDataset(
+        display_name="DS1", source=DatasetSource.H5_EXISTING, h5_path=h5_ds1,
+        channel_names=["GFP", "RFP", "DAPI"],
+    ))
+    dialog._refresh_dataset_tree()
+    assert _projection_items(dialog) == [None]
+    assert not dialog._projection_combo.isEnabled()
+
+
+def test_zseries_only_import_blocks_start(dialog, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(dialog, "_warn", warnings.append)
+    dialog._add_pending(_pending_import("Z", ["zseries"]))
+    dialog._refresh_dataset_tree()
+    assert dialog._try_build_config() is None
+    assert any("only a z-series" in w for w in warnings)

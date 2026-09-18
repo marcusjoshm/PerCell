@@ -33,6 +33,7 @@ from percell4.application.use_cases.accept_threshold import AcceptThreshold
 from percell4.application.use_cases.load_dataset import LoadDataset
 from percell4.application.use_cases.measure_cells import MeasureCells
 from percell4.application.use_cases.segment_cells import SegmentCells
+from percell4.interfaces.cli._projection_option import add_projection_option
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ def run_pipeline(
     skip_segmentation: bool = False,
     skip_threshold: bool = False,
     track: bool = False,
+    projection: str | None = None,
 ) -> PipelineResult:
     """Run the analysis pipeline headlessly through use cases.
 
@@ -84,7 +86,7 @@ def run_pipeline(
         PipelineResult with cell count, column count, and output paths.
     """
     # ── Composition root (CLI version) ──
-    repo = Hdf5DatasetRepository()
+    repo = Hdf5DatasetRepository(projection=projection)
     viewer = NullViewerAdapter()
     session = Session()
 
@@ -278,6 +280,7 @@ def main() -> int:
         help="Track cells across timepoints (time-lapse only)",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
+    add_projection_option(parser)
 
     args = parser.parse_args()
 
@@ -298,6 +301,7 @@ def main() -> int:
             skip_segmentation=args.skip_segmentation,
             skip_threshold=args.skip_threshold,
             track=args.track,
+            projection=args.projection,
         )
         print(f"Done: {result.n_cells} cells, {result.n_columns} columns")
         if result.output_csv:

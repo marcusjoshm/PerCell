@@ -123,6 +123,7 @@ def batch_process_datasets(
     segmenter=None,
     tracker=None,
     progress_callback: Callable[[int, int, str], None] | None = None,
+    projection: str | None = None,
 ) -> BatchProcessReport:
     """Compress + segment (all timepoints) + track each dataset, headlessly.
 
@@ -171,6 +172,10 @@ def batch_process_datasets(
     ``progress_callback(done, total, message)`` fires after each dataset.
     Granular per-frame / timing detail is emitted via this module's logger at
     DEBUG level (surfaced by the CLI's ``--verbose``).
+
+    ``projection`` is the z-projection segmentation reads (``None``: max,
+    else the dataset's only projection). A dataset that cannot resolve it
+    fails with the reason; the batch continues.
     """
     import shutil
     from time import perf_counter
@@ -216,7 +221,7 @@ def batch_process_datasets(
             else:
                 import_dataset(spec.source_dir, spec.output_h5, **(import_kwargs or {}))
 
-            repo = Hdf5DatasetRepository()
+            repo = Hdf5DatasetRepository(projection=projection)
             session = Session()
             handle = LoadDataset(repo, NullViewerAdapter(), session).execute(spec.output_h5)
             imported_channels = list(handle.metadata.get("channel_names", []))
@@ -225,7 +230,7 @@ def batch_process_datasets(
             # of the importer's "ch00,ch01"). One name per imported channel;
             # order is preserved, so this is a pure relabel.
             if channel_names is not None:
-                store = DatasetStore(spec.output_h5)
+                store = DatasetStore(spec.output_h5, projection=projection)
                 # Count channels from /intensity, not from channel_names:
                 # naming a dataset whose names list is empty or short is a
                 # legitimate use of this override, and validating against that

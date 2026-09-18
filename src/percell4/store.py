@@ -575,6 +575,22 @@ class DatasetStore:
         finally:
             self._close_if_not_session(f)
 
+    def named_projections(self) -> tuple[str, ...]:
+        """Projections stored as named arrays, in display order. Metadata only.
+
+        Empty for a dataset written before named projections (its one
+        ``/intensity`` reads whatever projection is requested) and for a
+        z-series-only dataset.
+        """
+        if not self.path.exists():
+            return ()
+        f = self._open_read()
+        try:
+            paths = _stored_projection_arrays(f)
+            return () if INTENSITY_PATH in paths.values() else tuple(paths)
+        finally:
+            self._close_if_not_session(f)
+
     def resolved_intensity_path(self) -> str:
         """The HDF5 path this store's intensity reads come from.
 
