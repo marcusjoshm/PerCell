@@ -24,7 +24,8 @@ execution: code
 - U8 covers packaging, CI and docs.
 
 **Stop conditions.** Stop and ask before continuing if any of these occur:
-- Bio-Formats reads the IDR0089 example with axes or calibration that disagree with its ImageJ metadata.
+- Bio-Formats reads the IDR0089 test file with axes or calibration that disagree with its ImageJ metadata.
+- Any step would download data, or wait on a download. Real-data checks use only the single local test file named in AE1; if it is missing, skip and report.
 - A Bio-Formats reader groups two independent files into one dataset even with file grouping off.
 - The legacy token-import regression test (U4) shows any byte difference.
 - JVM startup inside the reader child process fails on macOS arm64.
@@ -85,11 +86,11 @@ The import dialog also makes the user choose a discovery mode by hand, accepts a
 
 ### Acceptance Examples
 
-- AE1. Covers R1, R2, R5, R7, R9.
-  - **Given:** the 12-file IDR0089 folder.
-  - **When:** the user selects the folder.
-  - **Then:** the suggestion is in-file mode with 12 datasets, 3 channels, Z projected by max, and a note that z-count varies across files. Nothing is decoded.
-  - **Then, after accepting:** each output `.h5` holds `/intensity` of shape (3, 1024, 1024) float32 with dims C, H, W, `pixel_size_um` ≈ 0.041 and `z_spacing_um` = 0.125.
+- AE1. Covers R1, R2, R5, R9. (R7 directory behaviour is covered by synthetic stacks.)
+  - **Given:** the single local IDR0089 test file `AC16_Rep2_8d24h_HNRNPC488_NUP594_01_SIR_THR_ALN.tif` (97 z × 3 channels × 1024 × 1024, uint16, ImageJ `spacing=0.125`, `unit=micron`).
+  - **When:** the user selects the file.
+  - **Then:** the suggestion is in-file mode with 1 dataset, 3 channels, Z projected by max. Nothing is decoded.
+  - **Then, after accepting:** the output `.h5` holds `/intensity` of shape (3, 1024, 1024) float32 with dims C, H, W, `pixel_size_um` ≈ 0.041 and `z_spacing_um` = 0.125.
 - AE2. Covers R4, R14.
   - **Given:** a directory with 2 hyperstacks, 6 token-named single-plane TIFFs, one `._x.tif` AppleDouble file and one `.docx`.
   - **Then:** the suggestion is Flat mode, because it imports the most files. No probe runs and no Java consent is asked.
@@ -280,7 +281,7 @@ Headless never enters `Consent`. It fails with the reason unless `--provision-ja
 | Risk | Mitigation |
 |---|---|
 | JPype in a frozen app fails to find its internal jar (jpype issue #876) | U8 uses JPype's bundled PyInstaller hook, adds a custom hook only if needed, and runs a frozen smoke test that probes a `.fake` file. |
-| Bio-Formats reads uncompressed TIFF more slowly than tifffile | Measure on the 12-file folder in U3. If import is much slower than reading the bytes, raise it with the user; do not switch engines silently. |
+| Bio-Formats reads uncompressed TIFF more slowly than tifffile | Measure on the single test file `AC16_Rep2_8d24h_HNRNPC488_NUP594_01_SIR_THR_ALN.tif` in U3. If import is much slower than reading the bytes, raise it with the user; do not switch engines silently. |
 | First use needs network access | Offline gives a clear failure with manual steps (set `java_home`, place the jar). Consent states the download size. |
 | The child process misses the CI no-Java environment | A Java CI job (U8) runs the gated reader tests. `tests/` stays green without Java through the fake reader. |
 | Frozen builds lack `multiprocessing.freeze_support()` | U8 adds it to `src/percell4/app.py`, the frozen entry point that `percell4.spec` builds from. It also fixes a latent issue for the existing `parallel_decode` spawn pool. |
@@ -452,7 +453,8 @@ flowchart TB
 - (JVM) After the client shuts down, the child process has exited.
 - (JVM) `BIOFORMATS_SUFFIXES` equals the suffix set reported by the loaded reader.
 - (fake transport) `probe` calls `on_file` once per file, and `is_cancelled` returning True mid-probe ends the call and kills the child.
-- (JVM, real data, skipif the IDR0089 folder is missing) File 01 probes to Z=77, C=3, 1024 × 1024 with physical X ≈ 0.041 and Z = 0.125. Record the timings for probing all 12 files and for importing one.
+- (JVM, real data, skipif the file is missing) The single test file `AC16_Rep2_8d24h_HNRNPC488_NUP594_01_SIR_THR_ALN.tif` probes to Z=97, C=3, 1024 × 1024 with physical X ≈ 0.041 and Z = 0.125. Record the JVM start, probe and one mip read timings for that file only. Never probe the whole folder, and never download or wait for data.
+- Directory-scale behaviour (N stacks → N datasets, z-count variation) is tested only with small synthetic stacks, for example 5 × 3 × 64 × 64.
 
 **Verification:** The gated tests pass on a machine with Java. The real-file test passes, and its timings are recorded in the commit message.
 
@@ -553,7 +555,7 @@ flowchart TB
 - Overwriting an existing output lists its derived layers in the confirmation.
 - The existing dialog compliance tests (`test_dialog_helper_compliance.py`, `test_popup_window_compliance.py`, `test_progress_dialog_modality.py`) still pass.
 
-**Verification:** `tests/test_gui` passes. `tests_gui/` passes when run explicitly. A manual run on the IDR0089 folder imports 12 datasets matching AE1.
+**Verification:** `tests/test_gui` passes. `tests_gui/` passes when run explicitly. A manual run on the single test file imports one dataset matching AE1.
 
 ### U6. Workflow plan replay and field parity
 
@@ -672,7 +674,7 @@ flowchart TB
 | Layering | `lint-imports` (install `import-linter` first); the domain contract must hold | U1, U3, U4 |
 | GUI suite | `.venv/bin/pytest tests_gui/` | U5 |
 | Java-gated reader tests | `.venv/bin/pytest tests/test_adapters/test_bioformats_reader.py` on a machine with Java | U3, U4 |
-| Real-data check | The real-file test in U3, plus a GUI import of the IDR0089 folder matching AE1 | U3, U5 |
+| Real-data check | The real-file test in U3 on the single test file, plus a GUI import of that file matching AE1 | U3, U5 |
 | Frozen smoke | PyInstaller build on macOS arm64 probes a `.fake` file | U8 |
 
 ---
@@ -683,7 +685,7 @@ flowchart TB
 - The legacy token-import regression test is byte-identical.
 - The headless suite passes on a machine with no Java.
 - The Java-gated tests pass on a machine with Java.
-- The IDR0089 folder imports as 12 datasets matching AE1. The probe and import timings are recorded.
+- The single IDR0089 test file imports as one dataset matching AE1. The probe and import timings for that file are recorded.
 - `percell-import` is documented in `docs/cli.md`. `docs/installation.md` covers provisioning and the jar licence.
 - No `Memoizer` use exists. No `.bfmemo` file appears beside the data.
 - All commits are on `development`. Nothing is merged or cherry-picked to `main`.
