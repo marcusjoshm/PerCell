@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
     QLabel,
     QMainWindow,
     QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -31,10 +32,10 @@ from percell4.model import CellDataModel
 _GEOMETRY_KEY = "session_window/geometry"
 _PIN_KEY = "session_window/pin_on_top"
 _NO_DATASET_TEXT = "(no dataset)"
-# Wide enough for five selectors (channel, mask, segmentation, pixel binning,
-# projection) plus the dataset name and the pin toggle without resizing.
-_DEFAULT_WIDTH = 940
-_DEFAULT_HEIGHT = 80
+# Two rows (dataset / channel / mask / pin, then segmentation / pixel
+# binning / projection) keep the window narrow enough for small screens.
+_DEFAULT_WIDTH = 640
+_DEFAULT_HEIGHT = 96
 
 
 class SessionWindow(QMainWindow):
@@ -90,9 +91,17 @@ class SessionWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        row = QHBoxLayout(central)
-        row.setContentsMargins(10, 6, 10, 6)
+        rows = QVBoxLayout(central)
+        rows.setContentsMargins(10, 6, 10, 6)
+        rows.setSpacing(4)
+        row = QHBoxLayout()
         row.setSpacing(12)
+        rows.addLayout(row)
+        # Second row: segmentation, pixel binning and projection. One row
+        # holding every selector was wider than a laptop screen.
+        row2 = QHBoxLayout()
+        row2.setSpacing(12)
+        rows.addLayout(row2)
 
         # Dataset name header (left).
         self._dataset_label = QLabel(_NO_DATASET_TEXT)
@@ -115,19 +124,18 @@ class SessionWindow(QMainWindow):
         self._mask_combo.currentTextChanged.connect(self._on_mask_combo_changed)
         row.addWidget(self._mask_combo)
 
-        # Segmentation selector.
-        row.addSpacing(6)
-        row.addWidget(QLabel("Segmentation:"))
+        # Segmentation selector (second row).
+        row2.addWidget(QLabel("Segmentation:"))
         self._seg_combo = QComboBox()
         self._seg_combo.setMinimumWidth(140)
         self._seg_combo.currentTextChanged.connect(self._on_seg_combo_changed)
-        row.addWidget(self._seg_combo)
+        row2.addWidget(self._seg_combo)
 
         # Pixel-binning selector. The canonical (and only) Selector for
         # session.active_bin. DataPanel mirrors the value display but
         # never writes it (consolidate-canonical-state).
-        row.addSpacing(6)
-        row.addWidget(QLabel("Pixel Binning:"))
+        row2.addSpacing(6)
+        row2.addWidget(QLabel("Pixel Binning:"))
         self._bin_spin = QSpinBox()
         self._bin_spin.setRange(1, 16)
         self._bin_spin.setValue(1)
@@ -141,13 +149,13 @@ class SessionWindow(QMainWindow):
             "1 for no binning. Resets to 1 when you switch datasets."
         )
         self._bin_spin.valueChanged.connect(self._on_bin_spin_changed)
-        row.addWidget(self._bin_spin)
+        row2.addWidget(self._bin_spin)
 
         # Projection selector: which stored z-projection every analysis tool
         # and the viewer's channel layers read (the canonical Selector for
         # session.active_projection). Empty for a z-series-only dataset.
-        row.addSpacing(6)
-        row.addWidget(QLabel("Projection:"))
+        row2.addSpacing(6)
+        row2.addWidget(QLabel("Projection:"))
         self._projection_combo = QComboBox()
         self._projection_combo.setMinimumWidth(90)
         self._projection_combo.setToolTip(
@@ -159,7 +167,8 @@ class SessionWindow(QMainWindow):
         self._projection_combo.currentTextChanged.connect(
             self._on_projection_combo_changed
         )
-        row.addWidget(self._projection_combo)
+        row2.addWidget(self._projection_combo)
+        row2.addStretch()
 
         row.addStretch()
 
@@ -389,6 +398,24 @@ class SessionWindow(QMainWindow):
             self.restoreGeometry(geom)
         else:
             self.resize(_DEFAULT_WIDTH, _DEFAULT_HEIGHT)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self) -> None:
+        """Keep the window within the screen: a geometry saved when the
+        window was wider (or on a larger monitor) must not come back off-screen."""
+        screen = self.screen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        width = min(self.width(), available.width())
+        height = min(self.height(), available.height())
+        if (width, height) != (self.width(), self.height()):
+            self.resize(width, height)
+        if not available.contains(self.frameGeometry()):
+            self.move(
+                max(available.left(), min(self.x(), available.right() - width)),
+                max(available.top(), min(self.y(), available.bottom() - height)),
+            )
 
     # ── Lifecycle ───────────────────────────────────────────────────
 

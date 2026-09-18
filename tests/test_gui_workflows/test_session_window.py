@@ -361,7 +361,9 @@ def test_geometry_round_trip_via_close_and_reopen(qtbot):
     model = CellDataModel()
     win1 = SessionWindow(data_model=model)
     qtbot.addWidget(win1)
-    win1.setGeometry(150, 50, 1100, 90)
+    # Within the (offscreen) screen: wider geometries are clamped on restore.
+    width = min(700, win1.screen().availableGeometry().width() - 20)
+    win1.setGeometry(10, 50, width, 90)
     # Allow geometry to apply
     win1.show()
     qtbot.waitExposed(win1)
@@ -546,3 +548,28 @@ def test_reopened_window_follows_projection_changes(qtbot, tmp_path):
     qtbot.addWidget(second)
     model.session.set_active_projection("mean")
     assert second._projection_combo.currentText() == "mean"
+
+
+def test_two_rows_fit_a_small_screen(qtbot, tmp_path):
+    """Every selector used to sit on one row wider than a laptop screen."""
+    model = _projection_model(["max", "mean"], tmp_path)
+    win = SessionWindow(model)
+    qtbot.addWidget(win)
+    assert win.minimumSizeHint().width() <= 800
+    rows = win.centralWidget().layout()
+    assert rows.count() == 2
+
+
+def test_saved_geometry_wider_than_the_screen_is_clamped(qtbot):
+    from percell4.gui.settings import app_settings
+    from percell4.interfaces.gui.peer_views import session_window as sw
+
+    probe = SessionWindow(data_model=CellDataModel())
+    qtbot.addWidget(probe)
+    screen_width = probe.screen().availableGeometry().width()
+    probe.setGeometry(0, 0, screen_width + 600, 90)
+    app_settings().setValue(sw._GEOMETRY_KEY, probe.saveGeometry())
+
+    win = SessionWindow(data_model=CellDataModel())
+    qtbot.addWidget(win)
+    assert win.width() <= screen_width
