@@ -97,6 +97,17 @@ def compress_one(
         return entry, None, ""
 
     plan = entry.compress_plan or {}
+    if "infile_source" in plan:
+        return _compress_infile(entry, plan)
+    if plan.get("z_project_method") == "none":
+        # The dialog used to offer "none", which never worked: project_z
+        # raised on it. Name the field instead of failing inside the importer.
+        return (
+            entry,
+            DatasetFailure.COMPRESS_FAILED,
+            "z_project_method 'none' is no longer supported; every import "
+            "projects Z. Re-add this dataset with mip, mean or sum.",
+        )
     source_dir = plan.get("source_dir", "")
     files_paths: list[str] = plan.get("files", [])
     output_path = Path(plan.get("output_path", entry.h5_path))
@@ -205,6 +216,38 @@ def compress_one(
             DatasetFailure.COMPRESS_FAILED,
             f"{type(e).__name__}: {e}",
         )
+
+    updated = WorkflowDatasetEntry(
+        name=entry.name,
+        source=DatasetSource.H5_EXISTING,
+        h5_path=output_path,
+        channel_names=list(entry.channel_names),
+        compress_plan=None,
+    )
+    return updated, None, ""
+
+
+def _compress_infile(
+    entry: WorkflowDatasetEntry, plan: dict[str, Any]
+) -> tuple[WorkflowDatasetEntry, DatasetFailure | None, str]:
+    """Import one in-file source recorded in ``plan`` (exactly one per entry)."""
+    output_path = Path(plan.get("output_path", entry.h5_path))
+    try:
+        from percell4.adapters import infile_scan
+        from percell4.adapters.importer import import_infile_dataset
+        from percell4.domain.io.scheme_json import source_from_dict
+
+        source = source_from_dict(plan["infile_source"])
+        import_infile_dataset(
+            source,
+            output_path,
+            infile_scan.shared_reader(),
+            z_method=plan.get("z_method", "mip"),
+            creation_bin=int(plan.get("creation_bin", 1)),
+        )
+    except Exception as e:
+        logger.exception("compress_one (in-file) failed for %s", entry.name)
+        return entry, DatasetFailure.COMPRESS_FAILED, f"{type(e).__name__}: {e}"
 
     updated = WorkflowDatasetEntry(
         name=entry.name,

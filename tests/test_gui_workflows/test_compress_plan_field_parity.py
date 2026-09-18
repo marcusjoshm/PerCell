@@ -302,3 +302,74 @@ def test_end_to_end_mask_assignment_not_a_channel(tmp_path: Path) -> None:
         LayerAssignment(layer_type=LayerType.MASK, name="puncta").layer_type,
         LayerType,
     )
+
+
+# ── The standalone import path (main window) ─────────────────────────
+
+
+class _Progress:
+    def setMinimumDuration(self, _ms): ...
+    def setLabelText(self, _text): ...
+    def setValue(self, _v): ...
+    def close(self): ...
+    def wasCanceled(self): return False
+
+
+class _Host:
+    def statusBar(self):
+        return SimpleNamespace(showMessage=lambda _msg: None)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["token_config", "creation_bin", "flim_params", "tile_config", "z_project_method"],
+)
+def test_run_batch_compress_forwards_every_import_shaping_field(
+    tmp_path: Path, monkeypatch, field: str
+) -> None:
+    """The standalone Import Dataset loop, not only the workflow plan, must pass
+    each field through to import_dataset."""
+    from unittest.mock import patch
+
+    from percell4.domain.io.models import CompressConfig
+    from percell4.interfaces.gui import main_window as mw
+
+    monkeypatch.setattr(mw, "progress_dialog", lambda *a, **k: _Progress())
+    monkeypatch.setattr(mw, "message_box", lambda *a, **k: None)
+    values = {
+        "token_config": TokenConfig(channel=r"_C(\d+)"),
+        "creation_bin": 2,
+        "flim_params": {"frequency_mhz": 80.0},
+        "tile_config": SimpleNamespace(grid_rows=2),
+        "z_project_method": "sum",
+    }
+    config = CompressConfig(**values)
+    with patch("percell4.adapters.importer.import_dataset") as mock_import:
+        mw.LauncherWindow._run_batch_compress(_Host(), config, [_ds(tmp_path)])
+
+    assert mock_import.call_args.kwargs[
+        "z_project_method" if field == "z_project_method" else field
+    ] == values[field]
+
+
+def test_run_infile_import_forwards_z_method_and_creation_bin(tmp_path: Path, monkeypatch):
+    from unittest.mock import patch
+
+    from percell4.domain.io.infile import ImportScheme, ImportSource, SeriesProbe
+    from percell4.domain.io.models import CompressConfig
+    from percell4.interfaces.gui import main_window as mw
+
+    monkeypatch.setattr(mw, "progress_dialog", lambda *a, **k: _Progress())
+    monkeypatch.setattr(mw, "message_box", lambda *a, **k: None)
+    source = ImportSource(path=tmp_path / "a.tif", channel_indices=(0,), output_name="a",
+                          series=SeriesProbe(index=0, size_c=1, size_z=3))
+    config = CompressConfig(
+        creation_bin=3, output_dir=tmp_path,
+        infile_scheme=ImportScheme(z_method="mean", sources=(source,)),
+    )
+    with patch("percell4.adapters.importer.import_infile_dataset") as mock_import:
+        mw.LauncherWindow._run_infile_import(_Host(), config, reader=object())
+
+    kwargs = mock_import.call_args.kwargs
+    assert kwargs["z_method"] == "mean"
+    assert kwargs["creation_bin"] == 3

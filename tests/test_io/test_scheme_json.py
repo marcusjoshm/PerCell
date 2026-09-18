@@ -152,3 +152,17 @@ def test_bad_axis_map_raises_scheme_error() -> None:
 
 def test_scheme_error_is_a_percell_error() -> None:
     assert issubclass(ImportSchemeError, PercellError)
+
+
+def test_single_source_round_trips_and_rejects_bad_names():
+    from percell4.domain.io.infile import ImportSource, SeriesProbe
+    from percell4.domain.io.scheme_json import source_from_dict, source_to_dict
+
+    src = ImportSource(path=Path("/d/a.tif"), series_index=1, channel_indices=(0, 2),
+                       output_name="a_s01", series=SeriesProbe(index=1, size_c=3, size_z=4))
+    assert source_from_dict(source_to_dict(src)) == src
+    bad = {**source_to_dict(src), "output_name": "../escape"}
+    with pytest.raises(ImportSchemeError):
+        source_from_dict(bad)
+    with pytest.raises(ImportSchemeError):
+        source_from_dict(["not", "a", "dict"])

@@ -172,6 +172,23 @@ def _excluded_from_dict(d: dict[str, Any]) -> ExcludedEntry:
     )
 
 
+def source_to_dict(source: ImportSource) -> dict[str, Any]:
+    """Encode one source, e.g. for a workflow entry's compress plan."""
+    return _source_to_dict(source)
+
+
+def source_from_dict(data: dict[str, Any]) -> ImportSource:
+    """Decode one source. Raise :class:`ImportSchemeError` on any bad field."""
+    if not isinstance(data, dict):
+        raise ImportSchemeError("a source must be a JSON object")
+    try:
+        return _source_from_dict(data)
+    except ImportSchemeError:
+        raise
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ImportSchemeError(f"malformed source: {exc}") from exc
+
+
 def from_dict(data: dict[str, Any]) -> ImportScheme:
     """Decode a scheme. Raise :class:`ImportSchemeError` on any bad field."""
     if not isinstance(data, dict):

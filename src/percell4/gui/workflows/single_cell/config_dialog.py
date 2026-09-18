@@ -285,6 +285,64 @@ def _build_compress_plan(
     return plan
 
 
+def _infile_pending_datasets(cfg: Any) -> list[_PendingDataset]:
+    """One ``tiff_pending`` entry per importable in-file source.
+
+    Each entry's plan carries exactly one serialized source plus the z
+    method, so ``compress_one`` imports that source once. Channel names come
+    from the source's channel indices, the same way the importer names them.
+    """
+    from percell4.domain.io.naming import channel_display_name
+    from percell4.domain.io.scheme_json import source_to_dict
+
+    scheme = cfg.infile_scheme
+    out: list[_PendingDataset] = []
+    for src in scheme.importable_sources:
+        if not src.channel_indices:
+            continue
+        folder = Path(cfg.output_dir) if cfg.output_dir else src.path.parent
+        output = folder / f"{src.output_name}.h5"
+        out.append(
+            _PendingDataset(
+                display_name=src.output_name,
+                source=DatasetSource.TIFF_PENDING,
+                h5_path=output,
+                channel_names=[channel_display_name(str(c)) for c in src.channel_indices],
+                compress_plan={
+                    "infile_source": source_to_dict(src),
+                    "z_method": scheme.z_method,
+                    "output_path": str(output),
+                    "creation_bin": int(getattr(cfg, "creation_bin", 1)),
+                },
+            )
+        )
+    return out
+
+
+def _java_problem() -> str | None:
+    """Why Bio-Formats cannot run right now, or None when it can. Never raises."""
+    from percell4.adapters.java_runtime import describe_java_environment
+
+    env = describe_java_environment()
+    if env.ready:
+        return None
+    return env.java.reason if not env.java.ready else env.jar.reason
+
+
+def _infile_preflight(pending: list[Any]) -> str | None:
+    """A start-blocking message when in-file entries exist but Java is missing."""
+    if not any((getattr(pd, "compress_plan", None) or {}).get("infile_source")
+               for pd in pending):
+        return None
+    problem = _java_problem()
+    if problem is None:
+        return None
+    return (
+        f"In-file datasets need Java and Bio-Formats: {problem} "
+        "Open Import Dataset and choose In-file to set them up."
+    )
+
+
 class _PendingDataset:
     """Lightweight record of one user-added dataset inside the dialog.
 
@@ -328,6 +386,10 @@ class _PendingDataset:
                 return ("h5", str(self.h5_path))
         # tiff_pending: the compress plan carries the identity
         plan = self.compress_plan or {}
+        infile = plan.get("infile_source")
+        if infile:
+            # One file can hold several series; each is its own dataset.
+            return ("infile", str(infile.get("path", "")), int(infile.get("series_index", 0)))
         src_dir = plan.get("source_dir", "")
         files = tuple(plan.get("files", ()))
         return ("tiff", str(src_dir), files)
@@ -1693,6 +1755,25 @@ class WorkflowConfigDialog(QDialog):
         finally:
             dialog.deleteLater()
 
+        if cfg.infile_scheme is not None:
+            added, skipped = 0, []
+            for pd in _infile_pending_datasets(cfg):
+                if self._add_pending(pd):
+                    added += 1
+                else:
+                    skipped.append(f"{pd.display_name} (duplicate)")
+            if not added and not skipped:
+                self._dataset_status.setText(
+                    "No files selected in the import dialog — nothing to add."
+                )
+                return
+            self._refresh_dataset_tree()
+            self._refresh_round_channels()
+            self._refresh_column_picker()
+            self._update_start_enabled()
+            self._toast_add_result(added, skipped)
+            return
+
         selected_token_ids = sorted(cfg.selected_channels)
         layer_assignments = cfg.layer_assignments or {}
         channel_names = _derive_tiff_pending_channel_names(
@@ -2227,6 +2308,11 @@ class WorkflowConfigDialog(QDialog):
         """
         if not self._pending_datasets:
             self._warn("Add at least one dataset before starting.")
+            return None
+
+        java_problem = _infile_preflight(self._pending_datasets)
+        if java_problem is not None:
+            self._warn(java_problem)
             return None
 
         use_existing_masks = self._mask_selection_group.isChecked()
