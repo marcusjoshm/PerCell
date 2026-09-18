@@ -70,6 +70,24 @@ def _fmt_z_stack(projection: Any, spacing: Any) -> str:
     return text
 
 
+def _fmt_projections(projections: list[dict[str, Any]]) -> str:
+    """``max, mean`` for named projections; the legacy array is flagged."""
+    if not projections:
+        return "— (z-series only: add a projection to analyse)"
+    names = ", ".join(p["name"] for p in projections)
+    return names if projections[0]["named"] else f"{names} (single /intensity)"
+
+
+def _fmt_zseries(zseries: dict[str, Any] | None, spacing: Any) -> str:
+    """``3 × 97 × 1024 × 1024, 0.125 µm apart`` (dims order), '—' when absent."""
+    if zseries is None:
+        return "—"
+    text = " × ".join(str(int(x)) for x in zseries["shape"])
+    text += f" ({''.join(zseries['dims'])})"
+    text += f", {float(spacing):.4g} µm apart" if spacing is not None else ", spacing unknown"
+    return text
+
+
 def _fmt_resolution(native_shape: Any) -> str:
     if not native_shape:
         return "—"
@@ -106,11 +124,28 @@ def _inspect(path: Path) -> dict[str, Any]:
     # (masks can shadow label names); segmentations are the difference.
     seg_names = [n for n in store.list_labels() if n not in mask_set]
 
+    from percell4.domain.io.projections import pick_projection
+
+    # Every projection shares shape; report through the default pick so a
+    # dataset with several and no max still inspects (metadata only).
+    stored = store.list_projections()
+    default = DatasetStore(path, projection=pick_projection(stored))
     intensity: dict[str, Any] | None = None
-    if store.array_exists("intensity"):
+    if default.array_exists("intensity"):
         intensity = {
-            "shape": tuple(store.array_shape("intensity")),
-            "dtype": str(store.array_dtype("intensity")),
+            "shape": tuple(default.array_shape("intensity")),
+            "dtype": str(default.array_dtype("intensity")),
+        }
+    named = store.named_projections()
+    projections = [
+        {"name": name, "named": bool(named)} for name in stored
+    ]
+    zseries: dict[str, Any] | None = None
+    if store.has_zseries():
+        zseries = {
+            "shape": list(store.zseries_shape()),
+            "dims": list(store.zseries_dims()),
+            "channels": list(store.zseries_channels()),
         }
 
     return {
@@ -130,6 +165,8 @@ def _inspect(path: Path) -> dict[str, Any]:
             "description": store.description,
         },
         "intensity": intensity,
+        "projections": projections,
+        "zseries": zseries,
         "segmentations": _layer_rows(store, "labels", seg_names),
         "masks": _layer_rows(store, "masks", mask_names),
         "groups": _layer_rows(store, "groups", store.list_groups("groups")),
@@ -182,6 +219,8 @@ def _print_human(info: dict[str, Any]) -> None:
     print(f"Resolution:  {_fmt_resolution(m['native_shape'])}")
     print(f"Pixel size:  {_fmt_pixel_size(m['pixel_size_um'])}")
     print(f"Z stack:     {_fmt_z_stack(m['z_projection'], m['z_spacing_um'])}")
+    print(f"Projections: {_fmt_projections(info['projections'])}")
+    print(f"Z-series:    {_fmt_zseries(info['zseries'], m['z_spacing_um'])}")
     print(f"Timepoints:  {m['n_timepoints'] if m['n_timepoints'] is not None else '—'}")
     channels = m["channel_names"]
     print(f"Channels:    {', '.join(channels) if channels else '—'}")

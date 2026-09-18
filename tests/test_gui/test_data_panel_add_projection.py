@@ -53,3 +53,22 @@ def test_without_a_zseries_every_action_says_why(qtbot, tmp_path):
         btn = panel._projection_buttons[name]
         assert not btn.isEnabled()
         assert "z-series was not kept" in btn.toolTip()
+
+
+def test_info_lists_projections_and_zseries(qtbot, tmp_path):
+    path = tmp_path / "d.h5"
+    _dataset(path, projections=("max",))
+    panel, _session, _messages = _panel(qtbot, path)
+    panel.refresh_dataset_info()
+    text = panel._info_label.text()
+    assert "Projections: max  |  Z-series: 2 × 5 × 6 × 8" in text
+
+
+def test_info_shows_for_a_zseries_only_dataset(qtbot, tmp_path):
+    path = tmp_path / "z.h5"
+    _dataset(path)
+    panel, _session, _messages = _panel(qtbot, path)
+    panel.refresh_dataset_info()
+    text = panel._info_label.text()
+    assert "Shape: none (z-series only)" in text
+    assert "Projections: none (add one to analyse)" in text

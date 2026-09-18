@@ -12,6 +12,27 @@ the README for the current list.
 
 ### Added
 
+- **Z-stacks: keep the full z-series, several projections, and view in 3D
+  (September 2026).** Every import of z-stack data (the dialog's token and
+  In-file modes, single-cell workflows and `percell-import --keep`) chooses
+  what to keep: any of the max, mean and sum projections and/or the full
+  z-series (float32, inside the `.h5`), starting at max only with a size
+  estimate. Data without a Z axis imports exactly as before. A new
+  **Projection** selector in the Session bar decides what every analysis
+  tool and the viewer's channel layers read; headless commands take
+  `--projection` (default max, else the dataset's only projection) and
+  workflow runs record their projection in `run_config.json`. The Viewer
+  panel's **Show z-series** adds the stored stack to napari, lazily and to
+  scale, so napari's 2D/3D button gives Z/T sliders or a rotatable volume;
+  segmentations and masks can be repeated through Z. **Add projection** (Data
+  tab, `percell-batch-add-projection`) computes a new projection from a kept
+  z-series without re-importing. Segmentations and masks record their
+  `source_channel`, and measurements on datasets with named projections gain
+  a `projection` column. `percell-inspect` and the Data tab list projections
+  and the z-series. Datasets made before this change are unchanged: their
+  single `/intensity` reads as their one projection, whatever projection a
+  run asks for, and their measurements keep today's columns.
+
 - **In-file import of multi-dimensional files (September 2026).** *Import
   Dataset* accepts a folder or individual files, reads their headers without
   decoding pixels, and suggests a discovery mode. The new **In-file** mode

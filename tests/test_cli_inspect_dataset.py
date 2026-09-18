@@ -262,3 +262,62 @@ def test_inspect_without_z_fields_shows_placeholder(tmp_path, capsys):
     meta = json.loads(capsys.readouterr().out)[0]["metadata"]
     assert meta["z_spacing_um"] is None
     assert meta["z_projection"] is None
+
+
+# ── projections and the z-series (z-stack plan U10) ───────────
+
+
+def _zstack_h5(path, projections=("max", "mean")):
+    import numpy as np
+
+    from percell4.store import DatasetStore
+
+    store = DatasetStore(path)
+    store.create(metadata={"channel_names": ["a", "b", "c"], "n_channels": 3,
+                           "z_spacing_um": 0.125})
+    with store.zseries_writer((3, 97, 8, 8), ["a", "b", "c"]) as w:
+        w.write_plane(0, 0, 0, np.ones((8, 8), np.float32))
+    for name in projections:
+        store.write_projection(name, np.zeros((3, 8, 8), np.float32), dims=["C", "H", "W"])
+    return path
+
+
+def test_inspect_lists_projections_and_the_zseries(tmp_path, capsys, monkeypatch):
+    import h5py
+
+    path = _zstack_h5(tmp_path / "z.h5")
+    def _boom(*_a):
+        raise AssertionError("pixel read")
+
+    monkeypatch.setattr(h5py.Dataset, "__getitem__", _boom)
+    assert cli.main([str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "Projections: max, mean" in out
+    assert "Z-series:    3 × 97 × 8 × 8 (CZHW), 0.125 µm apart" in out
+    assert cli.main([str(path), "--json"]) == 0
+    rec = json.loads(capsys.readouterr().out)
+    rec = rec[0] if isinstance(rec, list) else rec
+    assert [p["name"] for p in rec["projections"]] == ["max", "mean"]
+    assert rec["zseries"]["shape"] == [3, 97, 8, 8]
+    assert rec["zseries"]["channels"] == ["a", "b", "c"]
+
+
+def test_inspect_mean_and_sum_without_max_does_not_crash(tmp_path, capsys):
+    path = _zstack_h5(tmp_path / "ms.h5", projections=("mean", "sum"))
+    assert cli.main([str(path)]) == 0
+    assert "Projections: mean, sum" in capsys.readouterr().out
+
+
+def test_inspect_legacy_reports_one_projection_and_no_zseries(tmp_path, capsys):
+    import numpy as np
+
+    from percell4.store import DatasetStore
+
+    path = tmp_path / "legacy.h5"
+    store = DatasetStore(path)
+    store.create(metadata={"channel_names": ["a"], "z_projection": "mip"})
+    store.write_array("intensity", np.zeros((8, 8), np.float32), attrs={"dims": ["H", "W"]})
+    assert cli.main([str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "Projections: max (single /intensity)" in out
+    assert "Z-series:    —" in out

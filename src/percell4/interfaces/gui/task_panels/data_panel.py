@@ -108,6 +108,19 @@ def _read_layer_bin_attrs(store, group: str) -> dict[str, int | None]:
     return result
 
 
+def _format_projection_line(store) -> str:
+    """``Projections: max, mean  |  Z-series: 3 × 97 × 1024 × 1024`` (metadata only)."""
+    try:
+        names = ", ".join(store.list_projections()) or "none (add one to analyse)"
+        z = (
+            " × ".join(str(x) for x in store.zseries_shape())
+            if store.has_zseries() else "not kept"
+        )
+    except Exception:  # noqa: BLE001 - a partial file still shows the rest
+        return "Projections: —"
+    return f"Projections: {names}  |  Z-series: {z}"
+
+
 class DataPanel(QWidget):
     """Panel for active layers, layer management, and dataset info."""
 
@@ -437,7 +450,10 @@ class DataPanel(QWidget):
             # Shape only — read HDF5 metadata, never the array. Reading the
             # full intensity here (it ran twice per load) was the dominant
             # large-file load cost.
-            shape = store.array_shape("intensity")
+            try:
+                shape = store.array_shape("intensity")
+            except Exception:  # noqa: BLE001 - z-series only, or no image yet
+                shape = "none (z-series only)" if store.has_zseries() else "none"
             session = self.data_model.session
             meta = store.metadata
             native_shape = meta.get("native_shape")
@@ -465,6 +481,7 @@ class DataPanel(QWidget):
             )
             if z_line:
                 pixel_size_lines = f"{pixel_size_lines}\n{z_line}"
+            pixel_size_lines = f"{pixel_size_lines}\n{_format_projection_line(store)}"
             # Read the description in its own guard: a description that
             # fails to read must not blank the facts above it.
             if description is _UNSET:

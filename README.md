@@ -93,6 +93,9 @@ See the [command-line reference](docs/cli.md) for all tools and options.
   lifetime values, or automated with a Gaussian mixture model.
 - **Measurement and export** — configurable per-cell and per-particle measurements across
   every segmentation and mask, exported as CSV and TIFF files.
+- **Z-stacks and 3D viewing** — import keeps any of the max, mean and sum projections and/or
+  the full z-series; a Projection selector picks what analysis reads, and the stored
+  z-series opens in napari's 2D and 3D views.
 - **Batch workflows and analysis** — end-to-end analysis workflows and particle analysis,
   configured in the GUI or run from dedicated CLI tools.
 

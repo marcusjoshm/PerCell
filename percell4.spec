@@ -53,6 +53,10 @@ _hidden = collect_submodules("percell4") + [
     "h5py",
     "tifffile",
     "sdtfile",
+    # Lazy z-series arrays for the viewer (Show z-series); imported only when
+    # the user shows one, so PyInstaller would not find it by itself.
+    "dask",
+    "dask.array",
     # In-file import (optional [bioformats] extra). JPype ships its own
     # PyInstaller hook for its internal jar; Java and the Bio-Formats jar are
     # downloaded at first use, never bundled.
