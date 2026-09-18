@@ -98,15 +98,15 @@ BIOFORMATS_SUFFIXES = frozenset(
         # Volocity, Imspector, Abberior
         ".mvd2", ".obf", ".msr",
         # Whole-slide
-        ".svs", ".ndpi", ".ndpis", ".mrxs", ".bif", ".vms", ".afi",
+        ".svs", ".ndpi", ".ndpis", ".bif", ".vms", ".afi",
         # Electron and other microscopy
         ".dm3", ".dm4", ".mrc", ".st", ".spe", ".sif", ".pic", ".ipl", ".ipw",
         ".nrrd", ".nhdr", ".fits", ".fts", ".nii", ".nii.gz", ".lim", ".sdt",
         ".spc", ".xdce", ".fli", ".c01", ".cxd", ".pcoraw", ".tnb", ".vws",
         ".al3d", ".am", ".amiramesh", ".aim", ".ch5", ".dcm", ".dicom",
         ".gel", ".i2i", ".jpk", ".l2d", ".liff", ".mea", ".mng", ".naf",
-        ".pnl", ".pr3", ".tga", ".wlz", ".wpi", ".xqd", ".xqf", ".zfp",
-        ".zfr", ".1sc", ".2fl", ".htd", ".klb", ".obsep", ".sm2", ".sm3",
+        ".pnl", ".pr3", ".tga", ".wpi", ".xqd", ".xqf", ".zfp",
+        ".zfr", ".1sc", ".2fl", ".htd", ".klb", ".sm2", ".sm3",
         ".stp", ".avi", ".mov", ".psd", ".pict", ".pcx",
         # JPEG 2000 and generic raster
         ".jp2", ".j2k", ".jpf", ".jpx", ".png", ".jpg", ".jpeg", ".bmp", ".gif",

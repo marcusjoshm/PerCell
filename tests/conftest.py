@@ -354,3 +354,35 @@ def lif_header_bytes():
         return blob[: len(blob) - truncate] if truncate else blob
 
     return build
+
+
+# ── Bio-Formats reader (JVM) ────────────────────────────────────────
+
+
+@pytest.fixture(scope="session")
+def jvm_available():
+    """A started real Bio-Formats reader, shared by the session; skip without one.
+
+    ``pytest.importorskip("jpype")`` is not enough: JPype imports fine on a
+    machine with no Java. This resolves Java and the jar the way the app does
+    and starts the reader child, so a test that asks for this fixture runs
+    only where the JVM really starts. The skip reason is the resolver's.
+
+    Session-scoped, so it resolves against the real advanced settings and the
+    real PerCell cache, not the per-test sandbox. Tests may cancel (kill) the
+    shared child; the reader restarts it on the next request.
+    """
+    from percell4.adapters.bioformats_reader import BioformatsReader
+    from percell4.adapters.java_runtime import describe_java_environment
+
+    env = describe_java_environment()
+    if not env.ready:
+        pytest.skip(f"Bio-Formats reader unavailable: {env.summary}")
+    reader = BioformatsReader(java_home=env.java.java_home, jar=env.jar.jar)
+    try:
+        reader.start()
+    except Exception as exc:  # noqa: BLE001 - any failure to start is a skip reason
+        reader.close()
+        pytest.skip(f"Bio-Formats reader did not start: {exc}")
+    yield reader
+    reader.close()

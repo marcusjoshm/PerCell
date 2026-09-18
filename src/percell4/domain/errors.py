@@ -107,6 +107,16 @@ class BioformatsUnavailableError(PercellError):
     """
 
 
+class BioformatsReadError(PercellError):
+    """Bio-Formats could not read the pixel data of an in-file source.
+
+    Raised by the reader when reading planes fails: a Java exception while
+    decoding, or the reader process stopping mid-read. The message is one
+    line naming the file; the full trace goes to the log. Probing never
+    raises this; a file that cannot be probed gets an error on its record.
+    """
+
+
 class ProvisioningCancelledError(PercellError):
     """The user cancelled a Java or Bio-Formats download.
 
