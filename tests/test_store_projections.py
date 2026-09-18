@@ -84,10 +84,14 @@ def test_legacy_without_z_projection_is_named_projection(tmp_path):
     assert s.list_projections() == ("projection",)
 
 
-def test_legacy_rejects_a_projection_it_does_not_hold(tmp_path):
-    s, _ = _legacy_store(tmp_path)
-    with pytest.raises(ProjectionRequiredError, match="projection"):
-        DatasetStore(s.path, projection="max").read_array("intensity")
+def test_legacy_reads_its_intensity_whatever_projection_is_requested(tmp_path):
+    """R17: a run over mixed datasets analyses old ones exactly as before."""
+    s, data = _legacy_store(tmp_path)
+    for name in ("max", "mean", "sum"):
+        other = DatasetStore(s.path, projection=name)
+        np.testing.assert_array_equal(other.read_array("intensity"), data)
+        assert other.array_exists("intensity")
+        assert other.resolved_intensity_path() == "intensity"
 
 
 def test_empty_dataset_keeps_todays_key_error(tmp_path):

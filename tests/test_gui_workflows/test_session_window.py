@@ -485,3 +485,64 @@ def test_bin_spin_idempotent_set_no_event_storm(qtbot, tmp_path):
 
     win._bin_spin.setValue(1)  # same as current
     assert events == []
+
+
+# ── Projection selector (z-stack plan U5) ───────────────────────────
+
+
+def _projection_model(names, tmp_path):
+    model = CellDataModel()
+    model.session.set_dataset(DatasetHandle(
+        path=tmp_path / "p.h5",
+        metadata={"channel_names": ["ch0"], "projection_names": list(names)},
+    ))
+    return model
+
+
+def test_projection_combo_lists_the_stored_projections(qtbot, tmp_path):
+    model = _projection_model(["max", "mean"], tmp_path)
+    win = SessionWindow(model)
+    qtbot.addWidget(win)
+    combo = win._projection_combo
+    assert [combo.itemText(i) for i in range(combo.count())] == ["max", "mean"]
+    assert combo.currentText() == "max"
+    assert combo.isEnabled()
+
+
+def test_projection_combo_writes_the_session(qtbot, tmp_path):
+    model = _projection_model(["max", "mean"], tmp_path)
+    win = SessionWindow(model)
+    qtbot.addWidget(win)
+    events = []
+    model.session.subscribe(Event.ACTIVE_PROJECTION_CHANGED, lambda: events.append(1))
+    win._projection_combo.setCurrentText("mean")
+    assert model.session.active_projection == "mean"
+    assert events == [1]
+
+
+def test_external_projection_change_updates_the_combo(qtbot, tmp_path):
+    model = _projection_model(["max", "sum"], tmp_path)
+    win = SessionWindow(model)
+    qtbot.addWidget(win)
+    model.session.set_active_projection("sum")
+    assert win._projection_combo.currentText() == "sum"
+
+
+def test_zseries_only_dataset_shows_an_empty_disabled_selector(qtbot, tmp_path):
+    """Covers AE1."""
+    model = _projection_model([], tmp_path)
+    win = SessionWindow(model)
+    qtbot.addWidget(win)
+    assert win._projection_combo.count() == 0
+    assert not win._projection_combo.isEnabled()
+
+
+def test_reopened_window_follows_projection_changes(qtbot, tmp_path):
+    model = _projection_model(["max", "mean"], tmp_path)
+    first = SessionWindow(model)
+    qtbot.addWidget(first)
+    first.close()
+    second = SessionWindow(model)
+    qtbot.addWidget(second)
+    model.session.set_active_projection("mean")
+    assert second._projection_combo.currentText() == "mean"

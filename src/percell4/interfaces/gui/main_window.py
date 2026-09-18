@@ -1406,12 +1406,20 @@ class LauncherWindow(QMainWindow):
 
         from percell4.adapters.hdf5_store import _build_handle_metadata
         from percell4.domain.dataset import DatasetHandle
+        from percell4.domain.io.projections import pick_projection
         from percell4.store import DatasetStore
 
         store = DatasetStore(h5_path)
         if not store.exists():
             self.statusBar().showMessage(f"File not found: {h5_path}")
             return
+
+        # Every GUI read goes through the projection the Session will pick
+        # for this dataset (KTD4): the store and the repository open with it
+        # before set_dataset notifies anyone.
+        projection = pick_projection(store.list_projections())
+        store = DatasetStore(h5_path, projection=projection)
+        self._repo.set_projection(projection)
 
         # Set as current dataset for the entire app
         self._current_store = store
@@ -1465,12 +1473,14 @@ class LauncherWindow(QMainWindow):
             view_bin = self.data_model.session.active_bin
 
         # Intensity existence + inventory from metadata only (no decode).
-        try:
-            store.array_shape("intensity")
-        except KeyError:
-            self.statusBar().showMessage(
-                f"No intensity data in {Path(h5_path).name}"
+        if not store.array_exists("intensity"):
+            message = (
+                f"{Path(h5_path).name} holds only a z-series; add a projection "
+                "to analyse it"
+                if store.has_zseries()
+                else f"No intensity data in {Path(h5_path).name}"
             )
+            self.statusBar().showMessage(message)
             return
 
         meta = store.metadata
@@ -1550,7 +1560,10 @@ class LauncherWindow(QMainWindow):
             shp, _dtype, is_ts = array_meta(h5_path, hp)
             return shp[0] if is_ts else 1
 
-        entries.append(("intensity", None, "intensity", _frames("intensity")))
+        # The selected projection's own array: the decoder opens the file
+        # itself, so it reads the path the store resolved (KTD2).
+        intensity_path = self._current_store.resolved_intensity_path()
+        entries.append(("intensity", None, intensity_path, _frames(intensity_path)))
         for ln in label_names:
             entries.append(("labels", ln, f"labels/{ln}", _frames(f"labels/{ln}")))
         for mn in mask_names:
@@ -1824,8 +1837,29 @@ class LauncherWindow(QMainWindow):
         store -- the launcher owns the store handle and the populate
         routine.
         """
+        if change.projection:
+            self._switch_projection()
         if change.bin:
             self._rebuild_viewer_for_bin_change()
+
+    def _switch_projection(self) -> None:
+        """Read the Session's new projection everywhere, then redraw (KTD4).
+
+        Replaces the current store (a store's projection is fixed), drops the
+        repository's cached stores, then rebuilds the viewer the way a Pixel
+        Binning change does. Active channel, mask and segmentation stay.
+        """
+        from percell4.store import DatasetStore
+
+        h5_path = getattr(self, "_current_h5_path", None)
+        projection = self.data_model.session.active_projection
+        self._repo.set_projection(projection)
+        if h5_path is None or getattr(self, "_current_store", None) is None:
+            return
+        if self._current_store.projection == projection:
+            return
+        self._current_store = DatasetStore(h5_path, projection=projection)
+        self._rebuild_viewer_for_bin_change()
 
     def _rebuild_viewer_for_bin_change(self) -> None:
         """Tear down and re-populate every layer at the new view bin.

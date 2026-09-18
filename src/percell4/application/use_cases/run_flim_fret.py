@@ -41,6 +41,7 @@ from typing import Any
 import numpy as np
 
 from percell4.application.use_cases.flim_fret_discovery import (
+    lifetime_store,
     validate_pair_layers,
 )
 from percell4.store import DatasetStore
@@ -167,8 +168,8 @@ def _compute_pair(
             pair, FlimFretStatus.MISSING_LAYER, reason="; ".join(missing)
         )
 
-    donor_store = DatasetStore(pair.donor_h5)
-    da_store = DatasetStore(pair.da_h5)
+    donor_store = lifetime_store(pair.donor_h5)
+    da_store = lifetime_store(pair.da_h5)
 
     # Load arrays at view_bin=1. native_shape lock guarantees per-dataset
     # consistency; cross-dataset shapes may differ and that's fine.

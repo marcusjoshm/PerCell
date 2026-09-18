@@ -54,6 +54,7 @@ def batch_run_analysis(
     progress_callback: Callable[[BatchAnalysisItemResult, int, int], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
     log: Callable[[str], None] | None = None,
+    projection: str | None = None,
 ) -> BatchAnalysisReport:
     """Run ``analysis_name`` over each path in ``h5_paths`` with isolation.
 
@@ -70,6 +71,10 @@ def batch_run_analysis(
     provided, a per-dataset banner is emitted and the same per-step
     progress the CLI streams is forwarded from each analysis's
     ``run()``. When ``None`` (the default) the batch is silent.
+
+    ``projection`` is the z-projection every dataset's intensity is read
+    from. A dataset that does not hold it fails with the reason; the others
+    run (R11).
     """
     if not h5_paths:
         raise ValueError("batch_run_analysis requires at least one h5_path")
@@ -121,6 +126,7 @@ def batch_run_analysis(
                 preset=preset,
                 log=log,
                 set_label=path.stem,
+                projection=projection,
             )
         except Exception as exc:
             item = BatchAnalysisItemResult(
@@ -163,6 +169,7 @@ def batch_run_analysis(
         h5_paths=h5_paths,
         results=results,
         cancelled=cancelled,
+        projection=projection,
     )
     write_analysis_run_config(folder, payload)
 
@@ -247,9 +254,10 @@ def _build_run_config_payload(
     h5_paths: list[Path],
     results: list[BatchAnalysisItemResult],
     cancelled: bool,
+    projection: str | None = None,
 ) -> dict[str, Any]:
     completed = sum(1 for r in results if r.status != "skipped")
-    return {
+    payload = {
         "analysis_name": analysis_name,
         "analysis_version": cls_version,
         "preset_name": preset_name,
@@ -271,3 +279,7 @@ def _build_run_config_payload(
             for r in results
         ],
     }
+    if projection is not None:
+        # Only runs that named one: older configs stay byte-identical.
+        payload["projection"] = projection
+    return payload

@@ -95,14 +95,29 @@ def _intensity_is_time_lapse(path: Path) -> bool:
     Opens the file directly with ``h5py`` to avoid pulling the full
     array through :meth:`DatasetStore.read_array`.
     """
+    store = lifetime_store(path)
+    if not store.array_exists("intensity"):
+        return False
     with h5py.File(path, "r") as f:
-        ds = f.get("intensity")
-        if ds is None:
-            return False
+        ds = f[store.resolved_intensity_path()]
         dims = ds.attrs.get("dims")
         if dims is not None and len(dims) > 0:
             return str(dims[0]) == "T"
         return ds.ndim >= 4
+
+
+def lifetime_store(path: Path) -> DatasetStore:
+    """A store for reading lifetime channels.
+
+    A lifetime channel has no Z axis, so every stored projection holds the
+    same image; the store reads the dataset's default projection (max, else
+    the first stored), so a dataset with several projections and no max
+    still reads.
+    """
+    from percell4.domain.io.projections import pick_projection
+
+    store = DatasetStore(path)
+    return DatasetStore(path, projection=pick_projection(store.list_projections()))
 
 
 def list_lifetime_channel_names(store: DatasetStore) -> list[str]:

@@ -31,7 +31,9 @@ from percell4.model import CellDataModel
 _GEOMETRY_KEY = "session_window/geometry"
 _PIN_KEY = "session_window/pin_on_top"
 _NO_DATASET_TEXT = "(no dataset)"
-_DEFAULT_WIDTH = 720
+# Wide enough for five selectors (channel, mask, segmentation, pixel binning,
+# projection) plus the dataset name and the pin toggle without resizing.
+_DEFAULT_WIDTH = 940
 _DEFAULT_HEIGHT = 80
 
 
@@ -63,6 +65,12 @@ class SessionWindow(QMainWindow):
             ),
             self._session.subscribe(
                 Event.ACTIVE_BIN_CHANGED, self._on_active_bin_changed
+            ),
+            self._session.subscribe(
+                Event.ACTIVE_PROJECTION_CHANGED, self._on_active_projection_changed
+            ),
+            self._session.subscribe(
+                Event.PROJECTION_LIST_CHANGED, self._refresh_projection_combo
             ),
             self._session.subscribe(
                 Event.CHANNEL_LIST_CHANGED, self._refresh_channel_combo
@@ -135,6 +143,24 @@ class SessionWindow(QMainWindow):
         self._bin_spin.valueChanged.connect(self._on_bin_spin_changed)
         row.addWidget(self._bin_spin)
 
+        # Projection selector: which stored z-projection every analysis tool
+        # and the viewer's channel layers read (the canonical Selector for
+        # session.active_projection). Empty for a z-series-only dataset.
+        row.addSpacing(6)
+        row.addWidget(QLabel("Projection:"))
+        self._projection_combo = QComboBox()
+        self._projection_combo.setMinimumWidth(90)
+        self._projection_combo.setToolTip(
+            "The z-projection that analysis and the viewer's channel layers "
+            "read. Resets to max (or the first stored projection) when you "
+            "switch datasets. Empty when the dataset holds only a z-series: "
+            "add a projection to analyse it."
+        )
+        self._projection_combo.currentTextChanged.connect(
+            self._on_projection_combo_changed
+        )
+        row.addWidget(self._projection_combo)
+
         row.addStretch()
 
         # Always-on-top toggle (right). Controls Z-order — when checked,
@@ -156,6 +182,7 @@ class SessionWindow(QMainWindow):
         self._refresh_mask_combo()
         self._refresh_seg_combo()
         self._refresh_bin_spin()
+        self._refresh_projection_combo()
 
     def _refresh_dataset_header(self) -> None:
         ds = self._session.dataset
@@ -215,6 +242,13 @@ class SessionWindow(QMainWindow):
             self._seg_combo, self._seg_names(), self._session.active_segmentation
         )
 
+    def _refresh_projection_combo(self) -> None:
+        names = self._session.projection_names
+        self._populate_combo(
+            self._projection_combo, names, self._session.active_projection
+        )
+        self._projection_combo.setEnabled(bool(names))
+
     def _refresh_bin_spin(self) -> None:
         """Sync the SpinBox to ``session.active_bin`` without firing the
         valueChanged echo (which would re-write Session)."""
@@ -268,6 +302,17 @@ class SessionWindow(QMainWindow):
         if self._bin_spin.value() != self._session.active_bin:
             self._refresh_bin_spin()
 
+    def _on_active_projection_changed(self) -> None:
+        if self._loading:
+            return
+        active = self._session.active_projection or ""
+        if self._projection_combo.currentText() != active:
+            self._loading = True
+            try:
+                self._projection_combo.setCurrentText(active)
+            finally:
+                self._loading = False
+
     # ── Combo change → Session write ────────────────────────────────
 
     def _on_channel_combo_changed(self, text: str) -> None:
@@ -285,6 +330,11 @@ class SessionWindow(QMainWindow):
         if self._loading:
             return
         self.data_model.set_active_segmentation(text or None)
+
+    def _on_projection_combo_changed(self, text: str) -> None:
+        if self._loading or not text:
+            return
+        self._session.set_active_projection(text)
 
     def _on_bin_spin_changed(self, value: int) -> None:
         if self._loading:

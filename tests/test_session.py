@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -757,3 +759,75 @@ class TestSessionActiveTimepoint:
         assert not tp_changes[0].bin
         assert not tp_changes[0].data
         assert not tp_changes[0].selection
+
+
+# ── active projection (z-stack plan U5) ───────────────────────
+
+
+def _proj_handle(names, tmp="/tmp/p.h5"):
+    return DatasetHandle(
+        path=Path(tmp),
+        metadata={"channel_names": ["ch0"], "projection_names": list(names)},
+    )
+
+
+def test_opening_a_dataset_picks_max_else_the_first_projection():
+    s = Session()
+    s.set_dataset(_proj_handle(["mean", "sum"]))
+    assert s.active_projection == "mean"
+    s.set_dataset(_proj_handle(["max", "mean"]))
+    assert s.active_projection == "max"
+    s.set_dataset(_proj_handle(["projection"]))
+    assert s.active_projection == "projection"
+    s.set_dataset(_proj_handle([]))
+    assert s.active_projection is None
+
+
+def test_switching_projection_emits_once_and_keeps_the_active_layers():
+    s = Session()
+    handle = DatasetHandle(path=Path("/tmp/p.h5"), metadata={
+        "channel_names": ["ch0", "ch1"], "segmentation_names": ["cells"],
+        "mask_names": ["m"], "projection_names": ["max", "mean"],
+    })
+    s.set_dataset(handle)
+    s.set_active_channel("ch1")
+    events = []
+    s.subscribe(Event.ACTIVE_PROJECTION_CHANGED, lambda: events.append(1))
+    for other in (Event.ACTIVE_CHANNEL_CHANGED, Event.ACTIVE_MASK_CHANGED,
+                  Event.ACTIVE_SEGMENTATION_CHANGED):
+        s.subscribe(other, lambda: events.append("other"))
+    s.set_active_projection("mean")
+    s.set_active_projection("mean")
+    assert events == [1]
+    assert (s.active_channel, s.active_segmentation, s.active_mask) == ("ch1", "cells", "m")
+
+
+def test_unknown_projection_is_rejected():
+    s = Session()
+    s.set_dataset(_proj_handle(["max"]))
+    with pytest.raises(ValueError, match="not stored"):
+        s.set_active_projection("sum")
+
+
+def test_dataset_change_emits_projection_events():
+    s = Session()
+    s.set_dataset(_proj_handle(["max", "mean"]))
+    s.set_active_projection("mean")
+    events = []
+    s.subscribe(Event.PROJECTION_LIST_CHANGED, lambda: events.append("list"))
+    s.subscribe(Event.ACTIVE_PROJECTION_CHANGED, lambda: events.append("active"))
+    s.set_dataset(_proj_handle(["max"]))
+    assert events == ["list", "active"]
+    assert s.active_projection == "max"
+    events.clear()
+    s.clear()
+    assert events == ["list", "active"] and s.active_projection is None
+
+
+def test_first_projection_added_to_a_zseries_only_dataset_becomes_active():
+    s = Session()
+    s.set_dataset(_proj_handle([]))
+    s.refresh_resource_lists(projection_names=["mean"])
+    assert s.active_projection == "mean"
+    s.refresh_resource_lists(projection_names=["max", "mean"])
+    assert s.active_projection == "mean"  # adding one never switches

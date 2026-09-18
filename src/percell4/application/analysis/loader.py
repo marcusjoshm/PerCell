@@ -59,6 +59,7 @@ def load_layers(
     layer_map: dict[str, str],
     roles: dict[str, ImageRole],
     timepoint: int | None = None,
+    projection: str | None = None,
 ) -> dict[str, NDArray]:
     """Read every role in ``layer_map`` from ``h5_path``.
 
@@ -83,6 +84,10 @@ def load_layers(
         single-timepoint path. The analysis framework loops timepoints and
         passes ``timepoint=t`` so each analysis run receives 2D inputs that
         satisfy the role ``ndim`` declarations.
+    projection:
+        The z-projection intensity roles read (``None``: max, else the sole
+        projection). A dataset that does not hold it raises
+        :class:`~percell4.domain.errors.ProjectionRequiredError`.
 
     Returns
     -------
@@ -97,7 +102,7 @@ def load_layers(
     LayerDtypeError
         Loaded array's ``ndim`` is not in ``role.ndim``.
     """
-    store = DatasetStore(h5_path)
+    store = DatasetStore(h5_path, projection=projection)
     out: dict[str, NDArray] = {}
     for role_name, layer_name in layer_map.items():
         if role_name not in roles:

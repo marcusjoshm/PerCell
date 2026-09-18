@@ -101,6 +101,14 @@ def resolve_projection(stored: Sequence[str], requested: str | None) -> str:
     )
 
 
+def pick_projection(names: Sequence[str]) -> str | None:
+    """The projection a newly opened dataset reads (R18): the preferred one
+    when stored, else the first stored one, else ``None``."""
+    if PREFERRED_PROJECTION in names:
+        return PREFERRED_PROJECTION
+    return names[0] if names else None
+
+
 def uncompressed_nbytes(shape: Iterable[int], itemsize: int) -> int:
     """Byte count of an array of ``shape``, in Python integers.
 

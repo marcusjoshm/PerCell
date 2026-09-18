@@ -64,6 +64,7 @@ from percell4.gui.analysis_widgets import (
     build_preset_combo,
     persist_output_parent,
     populate_layer_combo,
+    session_projection,
 )
 from percell4.io.paths import scan_files
 from percell4.store import DatasetStore
@@ -634,6 +635,7 @@ class WholeFieldIntensityDialog(QDialog):
                 progress_callback=on_progress,
                 cancel_check=cancel_check,
                 log=print,
+                projection=session_projection(self._host),
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("whole-field intensity analysis raised")

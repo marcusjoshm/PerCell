@@ -55,6 +55,14 @@ LAYER_SENTINEL = "—"
 # ── Dataset picker ─────────────────────────────────────────────
 
 
+def session_projection(host: object) -> str | None:
+    """The Session's active projection, read through a dialog's host window
+    (the launcher's ``data_model``); ``None`` without one."""
+    model = getattr(host, "data_model", None)
+    session = getattr(model, "session", None)
+    return getattr(session, "active_projection", None)
+
+
 def build_dataset_picker(
     parent: QWidget,
 ) -> tuple[QListWidget, QPushButton, QPushButton]:

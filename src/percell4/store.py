@@ -528,13 +528,20 @@ class DatasetStore:
 
         Every other path passes through unchanged. A dataset with no
         projection and no z-series keeps ``intensity``, so a read raises
-        today's ``KeyError``. Raises :class:`ProjectionRequiredError` when
-        the projection cannot be chosen, including a z-series-only dataset.
+        today's ``KeyError``; a dataset written before named projections
+        always reads its one ``/intensity``. Raises
+        :class:`ProjectionRequiredError` when the projection cannot be
+        chosen, including a z-series-only dataset.
         """
         if hdf5_path.lstrip("/") != INTENSITY_PATH:
             return hdf5_path
         paths = _stored_projection_arrays(f)
         if not paths and ZSERIES_PATH not in f:
+            return INTENSITY_PATH
+        if INTENSITY_PATH in paths.values():
+            # A dataset from before named projections has one array and no
+            # choice: it reads it whatever projection is requested, so a run
+            # over mixed datasets analyses old ones exactly as before (R17).
             return INTENSITY_PATH
         return paths[resolve_projection(tuple(paths), self.projection)]
 
