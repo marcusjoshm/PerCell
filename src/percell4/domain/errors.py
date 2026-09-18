@@ -76,3 +76,12 @@ class LifCalibrationError(PercellError):
     def __init__(self, errors: list[str] | tuple[str, ...]) -> None:
         self.errors: tuple[str, ...] = tuple(errors)
         super().__init__("; ".join(self.errors))
+
+
+class ImportSchemeError(PercellError):
+    """An in-file import scheme is malformed or unsafe.
+
+    Raised when a scheme file has an unknown version, a malformed field, or an
+    output name that would escape the output directory. The message names the
+    failing field so the user can fix the scheme file by hand.
+    """
