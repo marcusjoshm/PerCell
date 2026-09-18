@@ -1479,6 +1479,9 @@ class LauncherWindow(QMainWindow):
 
         if view_bin is None:
             view_bin = self.data_model.session.active_bin
+        # The bin the channel layers are drawn at, for scaling their display
+        # settings when a Pixel Binning change rebuilds them.
+        self._populated_bin = int(view_bin)
 
         # Intensity existence + inventory from metadata only (no decode).
         has_intensity = store.array_exists("intensity")
@@ -1930,9 +1933,9 @@ class LauncherWindow(QMainWindow):
         if self._current_store.projection == projection:
             return
         self._current_store = DatasetStore(h5_path, projection=projection)
-        self._rebuild_viewer_for_bin_change()
+        self._rebuild_viewer_for_bin_change(keep_display=False)
 
-    def _rebuild_viewer_for_bin_change(self) -> None:
+    def _rebuild_viewer_for_bin_change(self, keep_display: bool = True) -> None:
         """Tear down and re-populate every layer at the new view bin.
 
         Wrapped in viewer's ``_is_originator`` so napari's layer-list
@@ -1952,10 +1955,15 @@ class LauncherWindow(QMainWindow):
 
         session = self.data_model.session
         view_bin = session.active_bin
+        # A Pixel Binning change keeps each channel's display; a projection
+        # change resets it (max limits would clip a mean image).
+        saved = _capture_channel_display(viewer_win) if keep_display else {}
+        old_bin = getattr(self, "_populated_bin", view_bin)
 
         viewer_win._is_originator = True
         try:
             self._populate_viewer_from_store(view_bin=view_bin)
+            _restore_channel_display(viewer_win, saved, (view_bin / old_bin) ** 2)
             self._reapply_zseries()
             # Restore active selections via napari layer selection (NOT
             # via session.set_active_*). Session's active_* fields are
@@ -2455,6 +2463,47 @@ class LauncherWindow(QMainWindow):
         geom = app_settings().value("launcher/geometry")
         if geom:
             self.restoreGeometry(geom)
+
+
+def _channel_layers(viewer_win) -> list:
+    """The viewer's projection (channel) image layers, no z-series views."""
+    import napari
+
+    from percell4.domain.io.layout import is_zseries_view_layer
+
+    viewer = getattr(viewer_win, "viewer", None)
+    if viewer is None:
+        return []
+    return [
+        layer for layer in viewer.layers
+        if isinstance(layer, napari.layers.Image) and not is_zseries_view_layer(layer.name)
+    ]
+
+
+def _capture_channel_display(viewer_win) -> dict[str, tuple]:
+    """``{layer name: (contrast limits, gamma, colormap)}`` of the channel layers."""
+    return {
+        layer.name: (tuple(layer.contrast_limits), layer.gamma, layer.colormap)
+        for layer in _channel_layers(viewer_win)
+    }
+
+
+def _restore_channel_display(viewer_win, saved: dict[str, tuple], scale: float) -> None:
+    """Re-apply captured display settings after a rebuild.
+
+    Limits are multiplied by ``scale``: sum-binning by k multiplies pixel
+    values by k squared, so the same limits would wash out or clip.
+    """
+    for layer in _channel_layers(viewer_win):
+        if layer.name not in saved:
+            continue
+        limits, gamma, colormap = saved[layer.name]
+        low, high = limits[0] * scale, limits[1] * scale
+        range_low, range_high = (float(x) for x in layer.contrast_limits_range)
+        layer.contrast_limits_range = (min(low, range_low), max(high, range_high))
+        layer.contrast_limits = (low, high)
+        layer.gamma = gamma
+        layer.colormap = colormap
 
 
 def _derived_layer_names(h5_path) -> list[str]:

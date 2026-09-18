@@ -5,12 +5,13 @@ per z-series channel, named ``<channel> (z-series)`` so no tool that finds
 its input layer by channel name can pick one up. napari's own 2D/3D button
 then gives Z and T sliders in 2D and a rotatable render in 3D.
 
-While it is shown, segmentations and masks are hidden (they are 2D); the
-overlay option shows them again as read-only views repeated through every
-z-plane. On a time-lapse dataset the projection image layers are hidden
-too: napari aligns layers by their trailing axes, so a ``(T, H, W)``
-projection would otherwise put T on the Z slider. Turning the z-series off
-removes its layers and restores what was hidden.
+While it is shown, the projection image layers, segmentations and masks
+are hidden (the overlay option shows segmentations and masks again as
+read-only views repeated through every z-plane). Each z-series layer is
+linked to its channel's projection layer: contrast limits, gamma and
+colormap start from the projection's and stay equal both ways, so a
+display set on either applies to the other. Turning the z-series off
+removes its layers, drops the links and restores what was hidden.
 """
 
 from __future__ import annotations
@@ -33,6 +34,53 @@ from percell4.store import DatasetStore
 LAYER_TYPE_ZSERIES = "zseries"
 
 _OVERLAY_SOURCES = (LAYER_TYPE_SEGMENTATION, LAYER_TYPE_MASK)
+
+#: Display properties kept equal between a channel's projection and z-series.
+LINKED_PROPERTIES = ("contrast_limits", "gamma", "colormap")
+
+
+class _DisplayLink:
+    """Keeps :data:`LINKED_PROPERTIES` equal between two image layers."""
+
+    def __init__(self, a, b) -> None:
+        self._a, self._b = a, b
+        self._busy = False
+        self._handlers = []
+        for src, dst in ((a, b), (b, a)):
+            for prop in LINKED_PROPERTIES:
+                handler = self._make_handler(src, dst, prop)
+                getattr(src.events, prop).connect(handler)
+                self._handlers.append((src, prop, handler))
+
+    def _make_handler(self, src, dst, prop):
+        def copy(_event=None) -> None:
+            if self._busy:
+                return
+            self._busy = True
+            try:
+                _copy_property(src, dst, prop)
+            finally:
+                self._busy = False
+        return copy
+
+    def disconnect(self) -> None:
+        for layer, prop, handler in self._handlers:
+            try:
+                getattr(layer.events, prop).disconnect(handler)
+            except (TypeError, ValueError, RuntimeError):
+                pass
+        self._handlers.clear()
+
+
+def _copy_property(src, dst, prop: str) -> None:
+    if prop == "contrast_limits":
+        low, high = (float(x) for x in src.contrast_limits)
+        range_low, range_high = (float(x) for x in dst.contrast_limits_range)
+        if low < range_low or high > range_high:
+            dst.contrast_limits_range = (min(low, range_low), max(high, range_high))
+        dst.contrast_limits = (low, high)
+    else:
+        setattr(dst, prop, getattr(src, prop))
 
 
 def overlay_sources(viewer) -> list:
@@ -62,6 +110,7 @@ class ZSeriesView:
         self._scale: tuple[float, ...] = (1.0, 1.0, 1.0)
         self._n_z = 1
         self._n_t: int | None = None
+        self._links: list[_DisplayLink] = []
 
     # -- state ---------------------------------------------------------------
 
@@ -74,6 +123,12 @@ class ZSeriesView:
         self._hidden.clear()
         self._layer_names.clear()
         self._overlay_names.clear()
+        self._drop_links()
+
+    def _drop_links(self) -> None:
+        for link in self._links:
+            link.disconnect()
+        self._links.clear()
 
     def apply(self, h5_path: str | Path, view_bin: int) -> None:
         """Show or hide to match ``shown`` and ``overlay``."""
@@ -125,29 +180,41 @@ class ZSeriesView:
         for layer in list(viewer.layers):
             kind = layer.metadata.get(PERCELL_TYPE_KEY)
             hide = kind in _OVERLAY_SOURCES or (
-                timed and isinstance(layer, napari.layers.Image)
+                isinstance(layer, napari.layers.Image)
                 and not is_zseries_view_layer(layer.name)
             )
             if hide and layer.name not in self._hidden:
                 self._hidden[layer.name] = bool(layer.visible)
                 layer.visible = False
         for index, channel in enumerate(store.zseries_channels()):
-            kwargs = {}
-            if channel in viewer.layers:
-                kwargs["colormap"] = viewer.layers[channel].colormap
+            projection = viewer.layers[channel] if channel in viewer.layers else None
+            if isinstance(projection, napari.layers.Image):
+                # Start from the projection's display; the link keeps them equal.
+                limits = tuple(float(x) for x in projection.contrast_limits)
+                kwargs = {"colormap": projection.colormap, "gamma": projection.gamma}
+            else:
+                projection = None
+                limits = zseries_contrast_limits(h5_path, channel, index, view_bin)
+                kwargs = {}
             name = zseries_layer_name(channel)
             self._win.add_image(
                 lazy_zseries_channel(h5_path, index, view_bin),
                 name=name,
                 scale=self._scale,
-                contrast_limits=zseries_contrast_limits(h5_path, channel, index, view_bin),
+                contrast_limits=limits,
                 metadata={PERCELL_TYPE_KEY: LAYER_TYPE_ZSERIES},
                 **kwargs,
             )
             self._layer_names.append(name)
+            if projection is not None:
+                layer = viewer.layers[name]
+                layer.contrast_limits_range = tuple(projection.contrast_limits_range)
+                layer.contrast_limits = limits
+                self._links.append(_DisplayLink(projection, layer))
 
     def _remove_zseries(self) -> None:
         viewer = self._win.viewer
+        self._drop_links()
         self._set_overlay_layers(False)
         for name in self._layer_names:
             if name in viewer.layers:

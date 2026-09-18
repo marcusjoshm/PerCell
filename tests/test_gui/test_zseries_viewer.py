@@ -94,13 +94,53 @@ def test_show_adds_one_scaled_3d_layer_per_channel(shown):
     np.testing.assert_array_equal(np.asarray(layer.data[2]), _plane(0, 0, 2))
 
 
-def test_contrast_comes_from_the_max_projection(shown):
+def test_contrast_starts_from_the_projection_layer(shown):
+    """The z-series layer starts from its channel's projection display."""
     win, _view, _store = shown
-    # The max projection of ch1 is the constant brightest plane (10 + Z), so
-    # the limits start there; a flat image gets a one-unit window.
-    assert tuple(win.viewer.layers["ch1 (z-series)"].contrast_limits) == pytest.approx(
-        (10 + Z, 11 + Z)
+    projection = win.viewer.layers["ch1"]
+    zlayer = win.viewer.layers["ch1 (z-series)"]
+    assert tuple(zlayer.contrast_limits) == pytest.approx(tuple(projection.contrast_limits))
+    assert tuple(zlayer.contrast_limits_range) == pytest.approx(
+        tuple(projection.contrast_limits_range)
     )
+
+
+def test_projection_layers_are_hidden_while_shown_and_restored(tmp_path):
+    store = _dataset(tmp_path / "d.h5")
+    win = _Win()
+    _populate(win, store)
+    win.viewer.layers["ch0"].visible = False  # hidden by the user beforehand
+    view = ZSeriesView(win)
+    view.set_shown(True, store.path, 1)
+    assert not win.viewer.layers["ch0"].visible and not win.viewer.layers["ch1"].visible
+    view.set_shown(False, store.path, 1)
+    assert win.viewer.layers["ch1"].visible
+    assert not win.viewer.layers["ch0"].visible  # stays as the user left it
+
+
+def test_limits_gamma_and_colormap_are_linked_both_ways(shown):
+    win, _view, _store = shown
+    projection = win.viewer.layers["ch1"]
+    zlayer = win.viewer.layers["ch1 (z-series)"]
+    projection.contrast_limits_range = (0, 100)
+    projection.contrast_limits = (5.0, 40.0)
+    assert tuple(zlayer.contrast_limits) == pytest.approx((5.0, 40.0))
+    zlayer.contrast_limits = (2.0, 30.0)
+    assert tuple(projection.contrast_limits) == pytest.approx((2.0, 30.0))
+    zlayer.gamma = 0.6
+    assert projection.gamma == pytest.approx(0.6)
+    projection.colormap = "magma"
+    assert zlayer.colormap.name == "magma"
+    # Other channels are not affected.
+    assert tuple(win.viewer.layers["ch0 (z-series)"].contrast_limits) != pytest.approx((2.0, 30.0))
+
+
+def test_links_are_dropped_when_the_zseries_is_turned_off(shown):
+    win, view, store = shown
+    projection = win.viewer.layers["ch1"]
+    view.set_shown(False, store.path, 1)
+    projection.contrast_limits = (1.0, 2.0)  # must not touch a removed layer
+    assert "ch1 (z-series)" not in win.viewer.layers
 
 
 def test_zseries_only_contrast_samples_three_planes(tmp_path, monkeypatch):

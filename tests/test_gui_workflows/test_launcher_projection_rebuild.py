@@ -208,3 +208,24 @@ def test_projection_change_keeps_the_zseries_shown(launcher):
     assert "ch00 (z-series)" in layers and "cells (through Z)" in layers
     assert not layers["cells"].visible
     assert float(np.asarray(layers["ch00"].data).flat[0]) == 20.0  # mean, binned 2x2
+
+
+def test_bin_change_keeps_display_scaled_projection_change_resets(launcher):
+    win, _stub, session = launcher(["max", "mean"])
+    viewer_win = _ModelViewerWin()
+    win._windows["viewer"] = viewer_win
+    win._populate_viewer_from_store()
+    layer = viewer_win.viewer.layers["ch00"]
+    layer.contrast_limits_range = (0.0, 100.0)
+    layer.contrast_limits = (2.0, 8.0)
+    layer.gamma = 0.7
+
+    session.set_active_bin(2)  # sums 2x2 blocks: values x4
+    layer = viewer_win.viewer.layers["ch00"]
+    assert tuple(layer.contrast_limits) == pytest.approx((8.0, 32.0))
+    assert layer.gamma == pytest.approx(0.7)
+
+    session.set_active_projection("mean")  # a different image scale: reset
+    layer = viewer_win.viewer.layers["ch00"]
+    assert layer.gamma == pytest.approx(1.0)
+    assert tuple(layer.contrast_limits) != pytest.approx((8.0, 32.0))
