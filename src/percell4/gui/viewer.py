@@ -217,7 +217,19 @@ class ViewerWindow(QObject):
         # events) and acts as the timepoint Selector.
         self._viewer.dims.events.current_step.connect(self._on_dims_current_step)
 
+        self._add_contrast_dock()
         self._restore_geometry()
+
+    def _add_contrast_dock(self) -> None:
+        """Dock the histogram contrast control (never blocks the viewer)."""
+        try:
+            from percell4.gui.contrast_histogram import ContrastHistogram
+
+            self._contrast_dock = self._viewer.window.add_dock_widget(
+                ContrastHistogram(self._viewer), name="Contrast", area="right"
+            )
+        except Exception:  # noqa: BLE001 - the viewer works without it
+            logger.exception("could not add the contrast histogram")
 
     @property
     def viewer(self):
