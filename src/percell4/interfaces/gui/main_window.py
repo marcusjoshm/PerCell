@@ -294,6 +294,8 @@ class LauncherWindow(QMainWindow):
             show_window=self._show_window,
             get_viewer_window=lambda: self._windows.get("viewer"),
             show_status=lambda msg: self.statusBar().showMessage(msg),
+            set_zseries_shown=self._set_zseries_shown,
+            set_zseries_overlay=self._set_zseries_overlay,
         )
         return self._viewer_panel
 
@@ -1432,6 +1434,12 @@ class LauncherWindow(QMainWindow):
         # Update Data tab info + dropdowns
         self._update_data_tab_from_store()
 
+        # A new dataset starts with its z-series hidden.
+        zview = getattr(self, "_zview", None)
+        if zview is not None:
+            zview.forget_layers()
+            zview.shown = zview.overlay = False
+
         # Show viewer and populate with data. Suppress _show_window's
         # "empty viewer -> auto-populate" safety net during the load so the
         # explicit populate below is the single decode (otherwise the dataset
@@ -1473,14 +1481,11 @@ class LauncherWindow(QMainWindow):
             view_bin = self.data_model.session.active_bin
 
         # Intensity existence + inventory from metadata only (no decode).
-        if not store.array_exists("intensity"):
-            message = (
-                f"{Path(h5_path).name} holds only a z-series; add a projection "
-                "to analyse it"
-                if store.has_zseries()
-                else f"No intensity data in {Path(h5_path).name}"
+        has_intensity = store.array_exists("intensity")
+        if not has_intensity and not store.has_zseries():
+            self.statusBar().showMessage(
+                f"No intensity data in {Path(h5_path).name}"
             )
-            self.statusBar().showMessage(message)
             return
 
         meta = store.metadata
@@ -1491,6 +1496,18 @@ class LauncherWindow(QMainWindow):
         label_names = [n for n in store.list_labels() if n not in mask_set]
 
         viewer_win.clear()
+        if not has_intensity:
+            # A z-series-only dataset is view-only (R5): its labels and masks
+            # load, and the z-series shows from the Viewer panel.
+            self._populate_serial(
+                store, viewer_win, view_bin, channel_names, n_timepoints,
+                label_names, mask_names, intensity=False,
+            )
+            self.statusBar().showMessage(
+                f"{Path(h5_path).name} holds only a z-series; show it from the "
+                "Viewer panel, or add a projection to analyse it"
+            )
+            return
 
         # Native resolution (view_bin == 1) is the heavy case — decode it in
         # parallel across processes. Binned views (k > 1) are downsampled and
@@ -1509,15 +1526,20 @@ class LauncherWindow(QMainWindow):
 
     def _populate_serial(
         self, store, viewer_win, view_bin, channel_names, n_timepoints,
-        label_names, mask_names,
+        label_names, mask_names, intensity: bool = True,
     ) -> None:
-        """Read + display every layer serially (binned-view path)."""
+        """Read + display every layer serially (binned-view path).
+
+        ``intensity=False`` skips the channel images (a z-series-only
+        dataset has none).
+        """
         with store.open_read() as s:
-            intensity = s.read_array("intensity", view_bin=view_bin)
-            for name, arr in split_intensity_layers(
-                intensity, channel_names, n_timepoints
-            ):
-                viewer_win.add_image(arr, name=name)
+            if intensity:
+                image = s.read_array("intensity", view_bin=view_bin)
+                for name, arr in split_intensity_layers(
+                    image, channel_names, n_timepoints
+                ):
+                    viewer_win.add_image(arr, name=name)
             for label_name in label_names:
                 viewer_win.add_labels(
                     s.read_labels(label_name, view_bin=view_bin), name=label_name
@@ -1842,6 +1864,44 @@ class LauncherWindow(QMainWindow):
         if change.bin:
             self._rebuild_viewer_for_bin_change()
 
+    # ── z-series viewing (z-stack plan U8) ──────────────────────
+
+    def _zseries_view(self):
+        """The z-series controller of the current viewer window, or None."""
+        from percell4.gui.zseries_view import ZSeriesView
+
+        viewer_win = self._windows.get("viewer")
+        if viewer_win is None or not viewer_win._is_alive():
+            return None
+        zview = getattr(self, "_zview", None)
+        if zview is None or zview._win is not viewer_win:
+            zview = self._zview = ZSeriesView(viewer_win)
+        return zview
+
+    def _set_zseries_shown(self, shown: bool) -> None:
+        zview = self._zseries_view()
+        h5_path = getattr(self, "_current_h5_path", None)
+        if zview is None or h5_path is None:
+            return
+        zview.set_shown(shown, h5_path, self.data_model.session.active_bin)
+
+    def _set_zseries_overlay(self, overlay: bool) -> None:
+        zview = self._zseries_view()
+        h5_path = getattr(self, "_current_h5_path", None)
+        if zview is None or h5_path is None:
+            return
+        zview.set_overlay(overlay, h5_path, self.data_model.session.active_bin)
+
+    def _reapply_zseries(self) -> None:
+        """After a rebuild cleared the viewer, show the z-series again if it was."""
+        zview = getattr(self, "_zview", None)
+        h5_path = getattr(self, "_current_h5_path", None)
+        if zview is None or h5_path is None:
+            return
+        zview.forget_layers()
+        if zview.shown:
+            zview.apply(h5_path, self.data_model.session.active_bin)
+
     def _switch_projection(self) -> None:
         """Read the Session's new projection everywhere, then redraw (KTD4).
 
@@ -1885,6 +1945,7 @@ class LauncherWindow(QMainWindow):
         viewer_win._is_originator = True
         try:
             self._populate_viewer_from_store(view_bin=view_bin)
+            self._reapply_zseries()
             # Restore active selections via napari layer selection (NOT
             # via session.set_active_*). Session's active_* fields are
             # already correct; we just need napari to reflect them.

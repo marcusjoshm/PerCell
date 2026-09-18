@@ -145,3 +145,66 @@ def test_zseries_only_dataset_asks_for_a_projection(qtbot, tmp_path):
 
     assert stub.image_calls == []
     assert "add a projection" in win.statusBar().currentMessage()
+
+
+class _ModelViewerWin:
+    """A viewer window stub backed by a headless napari ViewerModel."""
+
+    def __init__(self) -> None:
+        from napari.components import ViewerModel
+
+        self.viewer = ViewerModel()
+        self._viewer = self.viewer
+        self.existing_viewer = None
+        self._is_originator = False
+
+    def _is_alive(self) -> bool:
+        return True
+
+    def clear(self) -> None:
+        self.viewer.layers.clear()
+
+    def add_image(self, data, name, **kwargs):
+        return self.viewer.add_image(data, name=name, **kwargs)
+
+    def add_labels(self, data, name, **kwargs):
+        from percell4.gui.viewer import LAYER_TYPE_SEGMENTATION, PERCELL_TYPE_KEY
+
+        return self.viewer.add_labels(
+            data, name=name, metadata={PERCELL_TYPE_KEY: LAYER_TYPE_SEGMENTATION}
+        )
+
+    def add_mask(self, data, name, **kwargs):
+        from percell4.gui.viewer import LAYER_TYPE_MASK, PERCELL_TYPE_KEY
+
+        return self.viewer.add_labels(
+            data, name=name, metadata={PERCELL_TYPE_KEY: LAYER_TYPE_MASK}, **kwargs
+        )
+
+    def _push_active_layer_to_napari(self, name, percell_type) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def test_projection_change_keeps_the_zseries_shown(launcher):
+    win, _stub, session = launcher(["max", "mean"])
+    store = win._current_store
+    with store.zseries_writer((2, 3, H, W), ["ch00", "ch01"]) as writer:
+        for c in range(2):
+            for z in range(3):
+                writer.write_plane(0, c, z, np.full((H, W), z, np.float32))
+    viewer_win = _ModelViewerWin()
+    win._windows["viewer"] = viewer_win
+    session.set_active_bin(2)  # rebuilds the viewer at bin 2
+    win._set_zseries_shown(True)
+    win._set_zseries_overlay(True)
+    assert "ch00 (z-series)" in viewer_win.viewer.layers
+
+    session.set_active_projection("mean")
+
+    layers = viewer_win.viewer.layers
+    assert "ch00 (z-series)" in layers and "cells (through Z)" in layers
+    assert not layers["cells"].visible
+    assert float(np.asarray(layers["ch00"].data).flat[0]) == 20.0  # mean, binned 2x2

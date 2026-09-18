@@ -5,6 +5,11 @@ no launcher reference. The viewer is a persistent singleton: ``Open Viewer``
 shows/raises it, ``Hide Viewer`` hides the window without destroying the
 viewer (it stays active and subscribed to the session).
 
+Also hosts the **Z-series** controls (z-stack plan U8): Show z-series and
+Show segmentations and masks through Z, present only when the dataset
+stores a z-series. The launcher owns the layers; the panel owns the
+checkboxes and calls back.
+
 Hosts the **Cell Filter** Selector — the canonical writer of the session
 ``filter_ids`` field. Selection originates here (and in the viewer canvas,
 cell table, and data plot, which are co-writers of ``selection``); filtering
@@ -19,6 +24,7 @@ from typing import Any
 
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -45,6 +51,8 @@ class ViewerPanel(QWidget):
         show_window: Callable[[str], None],
         get_viewer_window: Callable[[], Any],
         show_status: Callable[[str], None] = lambda _: None,
+        set_zseries_shown: Callable[[bool], None] = lambda _: None,
+        set_zseries_overlay: Callable[[bool], None] = lambda _: None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -52,7 +60,10 @@ class ViewerPanel(QWidget):
         self._show_window = show_window
         self._get_viewer_window = get_viewer_window
         self._show_status = show_status
+        self._set_zseries_shown = set_zseries_shown
+        self._set_zseries_overlay = set_zseries_overlay
         self._build_ui()
+        self._refresh_zseries_controls(reset=True)
 
         # Subscribe to filter changes so the Clear-Filter button enabled-state
         # and the count label stay in sync (relocated with the Selector).
@@ -75,6 +86,22 @@ class ViewerPanel(QWidget):
         btn_hide.setToolTip("Hide the viewer window; the viewer stays active.")
         btn_hide.clicked.connect(self._on_hide_viewer)
         layout.addWidget(btn_hide)
+
+        # ── Z-series group (only when the dataset stores one) ──
+        self._zseries_group = QGroupBox("Z-series")
+        z_layout = QVBoxLayout(self._zseries_group)
+        self._zseries_check = QCheckBox("Show z-series")
+        self._zseries_check.setToolTip(
+            "Add the stored z-series next to the projection. Use napari's 2D/3D "
+            "button to switch between Z (and T) sliders and a rotatable 3D view. "
+            "For viewing only: analysis always reads the projection."
+        )
+        self._zseries_check.toggled.connect(self._on_zseries_toggled)
+        z_layout.addWidget(self._zseries_check)
+        self._overlay_check = QCheckBox("Show segmentations and masks through Z")
+        self._overlay_check.toggled.connect(self._on_overlay_toggled)
+        z_layout.addWidget(self._overlay_check)
+        layout.addWidget(self._zseries_group)
 
         # ── Cell Filter group ──
         filter_group = QGroupBox("Cell Filter")
@@ -120,6 +147,47 @@ class ViewerPanel(QWidget):
     def _on_state_changed(self, change) -> None:
         if change.filter:
             self._on_filter_state_changed()
+        if getattr(change, "data", False):
+            # A dataset change: the new dataset starts with its z-series hidden.
+            self._refresh_zseries_controls(reset=True)
+        elif getattr(change, "segmentation_list", False) or getattr(change, "mask_list", False):
+            self._refresh_zseries_controls()
+
+    # ── Z-series ─────────────────────────────────────────────
+
+    def _dataset_metadata(self) -> dict:
+        session = getattr(self._data_model, "session", None)
+        ds = getattr(session, "dataset", None)
+        return ds.metadata if ds is not None else {}
+
+    def _refresh_zseries_controls(self, reset: bool = False) -> None:
+        meta = self._dataset_metadata()
+        has_zseries = bool(meta.get("has_zseries"))
+        self._zseries_group.setVisible(has_zseries)
+        if reset:
+            for box in (self._zseries_check, self._overlay_check):
+                box.blockSignals(True)
+                box.setChecked(False)
+                box.blockSignals(False)
+        has_overlay = bool(meta.get("segmentation_names") or meta.get("mask_names"))
+        shown = self._zseries_check.isChecked()
+        self._overlay_check.setEnabled(has_overlay and shown)
+        if not has_overlay:
+            self._overlay_check.setToolTip("This dataset has no segmentation or mask to show.")
+        elif not shown:
+            self._overlay_check.setToolTip("Show the z-series first.")
+        else:
+            self._overlay_check.setToolTip(
+                "Repeat each segmentation and mask through every z-plane "
+                "(read-only views; they are 2D)."
+            )
+
+    def _on_zseries_toggled(self, checked: bool) -> None:
+        self._set_zseries_shown(bool(checked))
+        self._refresh_zseries_controls()
+
+    def _on_overlay_toggled(self, checked: bool) -> None:
+        self._set_zseries_overlay(bool(checked))
 
     # ── Cell Filter (Selector: writes session filter_ids / selection) ──
 

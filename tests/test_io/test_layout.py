@@ -202,3 +202,38 @@ def test_channel_count_mirrors_the_split_for_every_layout():
         arr = np.zeros(shape, dtype=np.float32)
         expected = len(split_intensity_layers(arr, [], n_timepoints=nt))
         assert intensity_channel_count(shape, nt) == expected, shape
+
+
+# ── z-series layers (z-stack plan U8) ─────────────────────────
+
+
+def test_zseries_layer_names_never_equal_a_channel_name():
+    from percell4.domain.io.layout import (
+        is_zseries_view_layer,
+        through_z_layer_name,
+        zseries_layer_name,
+    )
+
+    assert zseries_layer_name("GFP") == "GFP (z-series)"
+    assert through_z_layer_name("cells") == "cells (through Z)"
+    assert is_zseries_view_layer("GFP (z-series)")
+    assert is_zseries_view_layer("cells (through Z)")
+    assert not is_zseries_view_layer("GFP")
+
+
+def test_zseries_scale_uses_the_idr0089_calibration():
+    import pytest
+
+    from percell4.domain.io.layout import zseries_scale
+
+    assert zseries_scale(0.125, 0.041) == pytest.approx((0.125 / 0.041, 1.0, 1.0))
+    assert zseries_scale(0.125, 0.041, view_bin=2) == pytest.approx((0.125 / 0.082, 1, 1))
+    assert zseries_scale(0.125, 0.041, time_lapse=True)[0] == 1.0
+
+
+def test_unknown_spacing_or_pixel_size_renders_cube_voxels():
+    from percell4.domain.io.layout import zseries_scale
+
+    assert zseries_scale(None, 0.041) == (1.0, 1.0, 1.0)
+    assert zseries_scale(0.125, None) == (1.0, 1.0, 1.0)
+    assert zseries_scale(0.0, 0.0) == (1.0, 1.0, 1.0)

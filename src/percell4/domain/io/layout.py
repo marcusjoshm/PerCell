@@ -22,6 +22,12 @@ __all__ = [
     "placeholder_channel_name",
     "placeholder_channel_index",
     "intensity_channel_count",
+    "ZSERIES_LAYER_SUFFIX",
+    "THROUGH_Z_LAYER_SUFFIX",
+    "zseries_layer_name",
+    "through_z_layer_name",
+    "is_zseries_view_layer",
+    "zseries_scale",
 ]
 
 # Historical heuristic: a leading axis this small on a non-time-lapse
@@ -177,3 +183,50 @@ def plan_channel_deletion(
     if intensity.ndim == 2:
         return ("delete", None, None)
     return ("noop", None, None)
+
+
+# ── z-series layers (z-stack plan KTD5, KTD7) ─────────────────────────
+
+#: Suffix that marks a viewer layer as a z-series. Tools find their input
+#: layer by the plain channel name, so a z-series layer can never be taken
+#: for a projection layer.
+ZSERIES_LAYER_SUFFIX = " (z-series)"
+
+#: Suffix of a segmentation or mask shown through Z over the z-series.
+THROUGH_Z_LAYER_SUFFIX = " (through Z)"
+
+
+def zseries_layer_name(channel: str) -> str:
+    """``"GFP"`` -> ``"GFP (z-series)"``."""
+    return f"{channel}{ZSERIES_LAYER_SUFFIX}"
+
+
+def through_z_layer_name(name: str) -> str:
+    """``"cells"`` -> ``"cells (through Z)"``."""
+    return f"{name}{THROUGH_Z_LAYER_SUFFIX}"
+
+
+def is_zseries_view_layer(name: str) -> bool:
+    """True for a z-series layer or a layer shown through Z over one."""
+    return name.endswith(ZSERIES_LAYER_SUFFIX) or name.endswith(THROUGH_Z_LAYER_SUFFIX)
+
+
+def zseries_scale(
+    z_spacing_um: float | None,
+    pixel_size_um: float | None,
+    view_bin: int = 1,
+    time_lapse: bool = False,
+) -> tuple[float, ...]:
+    """napari scale of a z-series layer: ``(Z, Y, X)``, with a leading 1 for T.
+
+    XY stays in the pixel units every other layer uses, so all layers line
+    up; Z is the z-spacing in those pixel units, so 3D keeps true
+    proportions. ``pixel_size_um`` is the stored (creation-binned) pixel
+    size; Pixel Binning ``view_bin`` makes each viewed pixel larger. Either
+    size unknown renders cube voxels (Z scaled like XY).
+    """
+    z = 1.0
+    if z_spacing_um and pixel_size_um and z_spacing_um > 0 and pixel_size_um > 0:
+        z = float(z_spacing_um) / (float(pixel_size_um) * max(1, int(view_bin)))
+    scale = (z, 1.0, 1.0)
+    return (1.0, *scale) if time_lapse else scale
