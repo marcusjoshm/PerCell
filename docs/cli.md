@@ -1,6 +1,6 @@
 # Command-line Tools
 
-PerCell ships 14 headless console scripts for batch operations across `.h5` datasets. All of them install on `PATH` from `pip install -e .`. The pre-0.5 `percell4-*` names still work as aliases of the same tools and will be removed in a later release.
+PerCell ships 15 headless console scripts: one imports multi-dimensional microscopy files into `.h5` datasets, and the rest run batch operations across `.h5` datasets. All of them install on `PATH` from `pip install -e .`. The pre-0.5 `percell4-*` names still work as aliases of the same tools and will be removed in a later release.
 
 The twelve batch and inspection tools documented below share these conventions (the [two development harnesses](#development-harnesses) at the end of this page are dev-time tools and follow their own, noted there):
 
@@ -29,6 +29,7 @@ Every tool also runs as a module (`python -m percell4.interfaces.cli.<module>`),
 | `percell-batch-threshold` | Run one thresholding round and write `/masks` + `/groups` back. | [↓](#percell-batch-threshold--headless-grouped-thresholding) |
 | `percell-batch-measure` | Measure existing masks and export a timestamped run folder of CSVs. | [↓](#percell-batch-measure--measure--particle-analysis--csv-export) |
 | `percell-inspect` | Print (or JSON-dump) each dataset's metadata, description, and layers. | [↓](#percell-inspect--print-dataset-metadata--layers) |
+| `percell-import` | Import multi-dimensional files (channels, z, time inside one file) through Bio-Formats. | [↓](#percell-import--import-multi-dimensional-files-through-bio-formats) |
 | `percell-batch-validate-puncta` | **Dev harness.** Race puncta detectors against ground truth and lock a winner. | [↓](#percell-batch-validate-puncta--race-puncta-detectors-against-ground-truth) |
 | `percell-window-bakeoff` | **Dev harness.** Score auto-window-size finders against the SG-mask IoU oracle. | [↓](#percell-window-bakeoff--score-auto-window-size-finders-against-the-sg-mask-oracle) |
 
@@ -491,6 +492,47 @@ percell-inspect /scratch/dishes/ --json
 percell-inspect /scratch/dishes/ --grep PFA
 ```
 
+## `percell-import` — import multi-dimensional files through Bio-Formats
+
+Imports microscopy files whose channels, z-series and time points live inside one file — ImageJ hyperstacks, OME-TIFF, and the other formats Bio-Formats reads — into `.h5` datasets. Each series of each file becomes one dataset. Z is always projected at import (`mip`, `mean` or `sum`); the dataset stores the pixel size, the z-spacing and the projection used, which `percell-inspect` prints.
+
+It scans the same way as the **In-file** mode of the import dialog: it reads file headers only, never pixel data, then probes the multi-plane files through Bio-Formats and prints the suggested scheme. Single-plane files are listed as excluded; import them with the dialog's Flat or Subdirectory mode. Unlike the batch tools above, its positional arguments are image files or folders, not `.h5` datasets.
+
+`--scan-only --scheme-out scheme.json` writes the suggested scheme to an editable JSON file; `--scheme scheme.json` imports exactly the sources it lists. A source whose axes are ambiguous (for example a stack with no z-spacing, which may be a time series) carries a `needs_confirmation` reason and blocks the import with exit `2` until the scheme confirms it — set `needs_confirmation` to `""`, or fix its `axis_map`.
+
+Bio-Formats needs Java. PerCell never downloads anything unless you pass `--provision-java`, which fetches a Java runtime and the Bio-Formats jar into PerCell's per-user cache (see [installation](installation.md)). Exit codes: `0` done, `1` Java unavailable, an import failed or an output exists without `--overwrite`, `2` usage error, nothing importable, or a source needs confirmation.
+
+```bash
+percell-import [SOURCES ...] [--output-dir DIR] [--scan-only] [--scheme-out PATH]
+               [--scheme PATH] [--z-method {mip,mean,sum}] [--overwrite]
+               [--provision-java] [--json]
+```
+
+| Option | Purpose |
+|---|---|
+| `sources` | Image files or folders to scan (folders are not recursive). Omit when using `--scheme`. |
+| `--output-dir DIR` | Folder for the `.h5` outputs, one per source, named after the file (and series). Required unless `--scan-only`. |
+| `--scan-only` | Print the suggested scheme and import nothing. |
+| `--scheme-out PATH` | Write the scheme to a JSON file you can edit and replay. |
+| `--scheme PATH` | Import the sources listed in this scheme file instead of scanning. |
+| `--z-method {mip,mean,sum}` | Z projection for a scan (default `mip`). A scheme file keeps its own. `sum` is not comparable across files with different z-counts. |
+| `--overwrite` | Replace existing `.h5` outputs as a whole (their segmentations and masks are lost). |
+| `--provision-java` | Download Java and Bio-Formats into the PerCell cache before scanning. |
+| `--json` | Print the scheme (and the imported paths) as JSON instead of text. |
+
+Examples:
+
+```bash
+# See what a folder of stacks would become, and keep the scheme
+percell-import /data/stacks/ --scan-only --scheme-out scheme.json
+
+# Import exactly what the (edited) scheme lists
+percell-import --scheme scheme.json --output-dir /data/h5/
+
+# First run on a machine without Java
+percell-import stack_01.tif --output-dir /data/h5/ --provision-java
+```
+
 ## Dataset descriptions
 
 Every `.h5` dataset can carry one free-text **description** — the sample, how it was prepared, the experimental condition, or anything else that makes the dataset recognisable weeks later. It is stored inside the file, so it survives copying and moving, and it is the answer to "which of these twelve dishes am I looking at?" when the filename no longer tells you.
@@ -505,7 +547,7 @@ Three surfaces read and write it:
 
 ## Development harnesses
 
-Two of the fourteen console scripts are **development and validation harnesses, not analysis commands**. They install on `PATH` alongside everything else — which is why they are documented here rather than left to be discovered by accident — but they answer method-development questions ("which detector should this project trust?", "what multiplier should the auto-window finder use?") rather than producing measurements for a paper. Nothing you would run over a folder of dishes on a Friday night.
+Two of the fifteen console scripts are **development and validation harnesses, not analysis commands**. They install on `PATH` alongside everything else — which is why they are documented here rather than left to be discovered by accident — but they answer method-development questions ("which detector should this project trust?", "what multiplier should the auto-window finder use?") rather than producing measurements for a paper. Nothing you would run over a folder of dishes on a Friday night.
 
 They exist because the choice of a detector and of a window-size heuristic are the two places where an ad-hoc decision would silently propagate into every downstream number. Turning both choices into a scored, reproducible race — against exhaustively hand-labeled ground truth in one case and an IoU oracle in the other — is what lets the project state a detector benchmark instead of an opinion. The puncta harness below is how that benchmark was produced (see `docs/methods/headless-puncta-thresholding.md`).
 
