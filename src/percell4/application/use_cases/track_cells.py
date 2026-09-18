@@ -79,7 +79,7 @@ class TrackCells:
 
         # Creator: store labels + lineage, refresh inventory, set active.
         # Tracking relabels the same cells: keep the channel they came from.
-        source = self._repo.read_array_attrs(handle, f"labels/{seg_name}").get(
+        source = self._repo.read_array_attrs(handle, f"labels/{raw_seg_name}").get(
             "source_channel"
         )
         self._repo.write_labels(

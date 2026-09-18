@@ -301,3 +301,60 @@ def test_registered_mosaic_zseries_max_equals_registered_max(tmp_path):
         DatasetStore(h5, projection="mean").read_array("intensity"),
         rtol=1e-6,
     )
+
+
+def test_registered_mosaic_keeping_mean_and_sum_without_max(tmp_path):
+    """Review #1: the canvas lock must not need a default projection."""
+    from tests.test_io.test_importer import (
+        _REG_CANVAS,
+        _REG_CORNERS,
+        _REG_TH,
+        _REG_TW,
+        _reg_tile_config,
+        _textured_scene,
+    )
+
+    src = tmp_path / "raw"
+    src.mkdir()
+    scene = _textured_scene(7)
+    for i, (y, x) in _REG_CORNERS.items():
+        tile = scene[y : y + _REG_TH, x : x + _REG_TW]
+        for z in range(2):
+            tifffile.imwrite(
+                str(src / f"img_s{i:02d}_z{z:02d}_ch00.tif"), (tile + z).astype(np.uint16)
+            )
+    h5 = tmp_path / "out.h5"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        import_dataset(src, h5, tile_config=_reg_tile_config(), storage=_storage("mean", "sum"))
+    store = DatasetStore(h5)
+    assert store.read_stitch_geometry().registered is True
+    assert store.list_projections() == ("mean", "sum")
+    assert DatasetStore(h5, projection="sum").array_shape("intensity") == _REG_CANVAS
+
+
+def test_z_count_mismatch_fails_before_writing(tmp_path):
+    """Review #10: nothing is written when the z-series cannot be built."""
+    from percell4.store import SourceShapeMismatchError
+
+    src, _ = _zstack_folder(tmp_path, n_ch=2, n_z=3)
+    (src / "img_z02_ch01.tif").unlink()
+    h5 = tmp_path / "out.h5"
+    with pytest.raises(SourceShapeMismatchError, match="z-plane counts"):
+        import_dataset(src, h5, storage=_storage("max", "zseries"))
+    assert not h5.exists()
+
+
+def test_zseries_only_with_a_channel_without_z_is_refused(tmp_path):
+    """Review #11: the .bin channel would be stored nowhere."""
+    src, _ = _zstack_folder(tmp_path, n_ch=1, n_z=2)
+    (src / "img_ch05.bin").write_bytes(np.ones((TH, TW, 4), dtype=np.uint32).tobytes())
+    flim = {
+        "frequency_mhz": 80.0, "channel_calibrations": {},
+        "bin_dimensions": {"x_dim": TW, "y_dim": TH, "t_dim": 4, "dtype": "uint32",
+                           "dim_order": "YXT", "header_bytes": 0},
+    }
+    h5 = tmp_path / "out.h5"
+    with pytest.raises(ValueError, match="Keep at least one projection"):
+        import_dataset(src, h5, flim_params=flim, storage=_storage("zseries"))
+    assert not h5.exists()

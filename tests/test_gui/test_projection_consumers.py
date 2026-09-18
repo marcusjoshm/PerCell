@@ -94,3 +94,24 @@ def test_flim_fret_lifetime_reads_a_dataset_with_several_projections(tmp_path):
     np.testing.assert_array_equal(
         _read_lifetime_channel(lifetime_store(path), "ch0_lifetime"), lifetime
     )
+
+
+def test_legacy_dataset_open_in_the_session_passes_no_projection():
+    """Review #4: a legacy pseudo-name must not reach the batch runners."""
+    from types import SimpleNamespace
+
+    from percell4.application.session import Session
+    from percell4.domain.dataset import DatasetHandle
+    from percell4.gui.analysis_widgets import session_projection
+
+    session = Session()
+    host = SimpleNamespace(data_model=SimpleNamespace(session=session))
+    session.set_dataset(DatasetHandle(path="/tmp/legacy.h5", metadata={
+        "projection_names": ["projection"], "named_projections": False}))
+    assert session.active_projection == "projection"
+    assert session_projection(host) is None
+
+    session.set_dataset(DatasetHandle(path="/tmp/new.h5", metadata={
+        "projection_names": ["max", "mean"], "named_projections": True}))
+    session.set_active_projection("mean")
+    assert session_projection(host) == "mean"

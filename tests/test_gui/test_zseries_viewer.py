@@ -251,3 +251,26 @@ def test_overlay_is_greyed_out_without_segmentation_or_mask(qtbot):
     panel._zseries_check.setChecked(True)
     assert not panel._overlay_check.isEnabled()
     assert "no segmentation or mask" in panel._overlay_check.toolTip()
+
+
+def test_deleting_a_channel_while_shown_rebuilds_the_layers(shown):
+    """Review #12: layers bind a channel position, so they must be rebuilt."""
+    win, view, store = shown
+    store.delete_zseries_channel("ch0")
+    view.rebuild(store.path, 1)
+    names = [layer.name for layer in win.viewer.layers if "(z-series)" in layer.name]
+    assert names == ["ch1 (z-series)"]
+    np.testing.assert_array_equal(
+        np.asarray(win.viewer.layers["ch1 (z-series)"].data[2]), _plane(0, 1, 2)
+    )
+    assert not win.viewer.layers["cells"].visible  # still hidden while shown
+
+
+def test_deleting_every_zseries_channel_turns_the_view_off(shown):
+    win, view, store = shown
+    store.delete_zseries_channel("ch0")
+    store.delete_zseries_channel("ch1")
+    view.rebuild(store.path, 1)
+    assert not view.shown
+    assert not [layer for layer in win.viewer.layers if "(z-series)" in layer.name]
+    assert win.viewer.layers["cells"].visible

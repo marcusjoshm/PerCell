@@ -84,6 +84,21 @@ class ZSeriesView:
         if self.shown:
             self._set_overlay_layers(self.overlay)
 
+    def rebuild(self, h5_path: str | Path, view_bin: int) -> None:
+        """Remove and re-add the z-series layers (the stored channels changed).
+
+        Each layer reads a fixed z-series channel position, so after a channel
+        is deleted or renamed the old layers would show the wrong channel.
+        """
+        if not self.shown:
+            return
+        self._remove_zseries()
+        if not DatasetStore(h5_path).has_zseries():
+            # Its last channel was deleted, and the z-series with it.
+            self.shown = self.overlay = False
+            return
+        self.apply(h5_path, view_bin)
+
     def set_shown(self, shown: bool, h5_path: str | Path, view_bin: int) -> None:
         self.shown = bool(shown)
         self.apply(h5_path, view_bin)

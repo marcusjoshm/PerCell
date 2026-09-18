@@ -1863,6 +1863,8 @@ class LauncherWindow(QMainWindow):
             self._switch_projection()
         if change.bin:
             self._rebuild_viewer_for_bin_change()
+        if getattr(change, "channel_list", False):
+            self._refresh_zseries_layers()
 
     # ── z-series viewing (z-stack plan U8) ──────────────────────
 
@@ -1891,6 +1893,15 @@ class LauncherWindow(QMainWindow):
         if zview is None or h5_path is None:
             return
         zview.set_overlay(overlay, h5_path, self.data_model.session.active_bin)
+
+    def _refresh_zseries_layers(self) -> None:
+        """A channel was added, renamed or deleted: the z-series layers bind a
+        channel position, so rebuild them from the stored z-series."""
+        zview = getattr(self, "_zview", None)
+        h5_path = getattr(self, "_current_h5_path", None)
+        if zview is None or h5_path is None or not zview.shown:
+            return
+        zview.rebuild(h5_path, self.data_model.session.active_bin)
 
     def _reapply_zseries(self) -> None:
         """After a rebuild cleared the viewer, show the z-series again if it was."""

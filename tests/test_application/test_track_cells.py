@@ -133,4 +133,4 @@ def test_tracking_keeps_the_source_channel():
     repo.attrs["labels/cp"] = {"source_channel": "ch0"}
     session = _session(3)
     TrackCells(repo, session, LaptrackTracker()).execute("cp")
-    assert repo.attrs["labels/cp"]["source_channel"] == "ch0"
+    assert repo.attrs["labels/cp_tracked"]["source_channel"] == "ch0"

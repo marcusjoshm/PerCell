@@ -57,9 +57,18 @@ LAYER_SENTINEL = "—"
 
 def session_projection(host: object) -> str | None:
     """The Session's active projection, read through a dialog's host window
-    (the launcher's ``data_model``); ``None`` without one."""
+    (the launcher's ``data_model``); ``None`` without one.
+
+    Also ``None`` when the open dataset predates named projections: its one
+    array reads under a pseudo-name (``projection``, or ``max`` for a mip
+    import) that the named datasets in a batch do not hold, so the batch
+    falls back to each dataset's default (R11).
+    """
     model = getattr(host, "data_model", None)
     session = getattr(model, "session", None)
+    dataset = getattr(session, "dataset", None)
+    if dataset is None or not dataset.metadata.get("named_projections"):
+        return None
     return getattr(session, "active_projection", None)
 
 

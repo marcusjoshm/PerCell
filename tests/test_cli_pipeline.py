@@ -241,3 +241,27 @@ class TestTimelapsePipeline:
         # Both frames flagged the same bright region.
         assert mask[0, 6, 6] == 1 and mask[1, 6, 6] == 1
         assert mask[0, 0, 0] == 0
+
+
+def test_pipeline_projection_labels_rows_with_the_projection_read(tmp_path):
+    """Review #2: --projection must label rows with the projection it reads."""
+    from percell4.interfaces.cli.run_pipeline import run_pipeline
+
+    path = tmp_path / "named.h5"
+    store = DatasetStore(path)
+    store.create(metadata={"channel_names": ["GFP"], "n_channels": 1})
+    store.write_projection("max", np.full((20, 20), 9.0, np.float32), dims=["H", "W"])
+    store.write_projection("mean", np.full((20, 20), 3.0, np.float32), dims=["H", "W"])
+    labels = np.zeros((20, 20), np.int32)
+    labels[3:8, 3:8] = 1
+    store.write_labels("cells", labels)
+    output = tmp_path / "m.csv"
+
+    run_pipeline(
+        path, skip_segmentation=True, skip_threshold=True, output_csv=output,
+        projection="mean",
+    )
+
+    df = pd.read_csv(output)
+    assert (df["projection"] == "mean").all()
+    assert (df["GFP_mean_intensity"] == 3.0).all()

@@ -1296,7 +1296,10 @@ def test_session_projection_seeds_when_offered(qtbot, monkeypatch):
 
     from percell4.gui.workflows.single_cell import config_dialog as cdlg
 
-    session = SimpleNamespace(active_projection="sum")
+    session = SimpleNamespace(
+        active_projection="sum",
+        dataset=SimpleNamespace(metadata={"named_projections": True}),
+    )
     parent = SimpleNamespace(data_model=SimpleNamespace(session=session))
     monkeypatch.setattr(cdlg.WorkflowConfigDialog, "parent", lambda self: parent)
     dlg = WorkflowConfigDialog()

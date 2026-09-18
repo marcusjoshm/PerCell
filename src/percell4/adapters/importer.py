@@ -922,6 +922,20 @@ def import_dataset(
         h, w = pre_bin_shape
         native_shape = (h // creation_bin, w // creation_bin)
 
+    # 4c. Storage checks that must fail before anything is written: the
+    # z-series needs one z-count everywhere, and a z-series-only import
+    # cannot hold channels without a Z axis (.bin or single-plane), which
+    # would be stored nowhere and block adding a projection later.
+    zseries_plan = _zseries_plan(zseries_sources) if keep_zseries and zseries_sources else None
+    if named and not projection_methods:
+        z_names = {name for name, _ in zseries_sources}
+        flat = [name for name in channel_names if name not in z_names]
+        if flat:
+            raise ValueError(
+                f"Channels {flat} have no z-series, so keeping only the z-series "
+                "would store them nowhere. Keep at least one projection."
+            )
+
     # 5. Write to HDF5 (before updating CSV!)
     _progress(4, 5, "Writing HDF5...")
     store = DatasetStore(output_h5)
@@ -1023,7 +1037,7 @@ def import_dataset(
                 "disconnected": stitch_disconnected,
                 "fusion": intensity_fusion,
             }
-        _write_token_zseries(store, zseries_sources, tile_config, creation_bin, geometry)
+        _write_token_zseries(store, zseries_plan, tile_config, creation_bin, geometry)
 
     # Write segmentation label layers
     for name, array in label_layers:
@@ -1085,9 +1099,12 @@ def import_dataset(
         # Final consistency lock: the stored /intensity canvas must equal the
         # registered canvas the offsets were placed against, before committing.
         # Data invariant → raise (not assert), so it survives ``python -O``.
+        # Every projection shares the canvas: read one concretely, since a
+        # dataset keeping several projections but not max has no default.
+        kept = store.list_projections()
         stored_hw = (
-            store.array_shape("intensity")[-2:]
-            if store.array_exists("intensity")
+            DatasetStore(output_h5, projection=kept[0]).array_shape("intensity")[-2:]
+            if kept
             else store.zseries_shape()[-2:]
         )
         if tuple(stored_hw) != tuple(stitch_canvas):
@@ -1373,23 +1390,15 @@ def _stack_intensity(
     return assemble_channels(channel_images), ["C", "H", "W"]
 
 
-def _write_token_zseries(
-    store: DatasetStore,
+def _zseries_plan(
     sources: list[tuple[str, list[list]]],
-    tile_config: TileConfig | None,
-    creation_bin: int,
-    geometry: dict[str, Any] | None,
-) -> None:
-    """Write the z-series of a token import, one stitched plane at a time.
+) -> tuple[list[tuple[str, list[list[dict[int, Any]]]]], int]:
+    """``(per-channel z-plane tile files, z-count)`` for a token z-series.
 
     ``sources`` lists each channel with a Z axis and its files per
-    timepoint. Each z-plane's tiles are placed exactly as the projection's
-    were: on the grid (then the plane is binned), or at the registered
-    offsets in ``geometry`` (tiles binned first, as registration did). Every
-    channel and timepoint must have the same number of z-planes.
+    timepoint. Raises :class:`SourceShapeMismatchError` when channels or
+    timepoints differ in z-plane count; called before the output is written.
     """
-    from percell4.domain.io.assembler import assemble_tiles_with_offsets
-
     per_source = [(name, [_z_tile_files(group) for group in tps]) for name, tps in sources]
     z_counts = {len(zs) for _, tps in per_source for zs in tps}
     if len(z_counts) != 1:
@@ -1397,7 +1406,26 @@ def _write_token_zseries(
             f"Channels or timepoints have different z-plane counts {sorted(z_counts)}; "
             "a z-series needs the same number of z-planes everywhere."
         )
-    n_z = z_counts.pop()
+    return per_source, z_counts.pop()
+
+
+def _write_token_zseries(
+    store: DatasetStore,
+    plan: tuple[list[tuple[str, list[list[dict[int, Any]]]]], int],
+    tile_config: TileConfig | None,
+    creation_bin: int,
+    geometry: dict[str, Any] | None,
+) -> None:
+    """Write the z-series of a token import, one stitched plane at a time.
+
+    ``plan`` comes from :func:`_zseries_plan`. Each z-plane's tiles are
+    placed exactly as the projection's were: on the grid (then the plane is
+    binned), or at the registered offsets in ``geometry`` (tiles binned
+    first, as registration did).
+    """
+    from percell4.domain.io.assembler import assemble_tiles_with_offsets
+
+    per_source, n_z = plan
     n_t = len(per_source[0][1])
     height, width = store.metadata["native_shape"]
     shape = ((n_t,) if n_t > 1 else ()) + (len(per_source), n_z, int(height), int(width))
@@ -1464,11 +1492,25 @@ def _assemble_planes(
     methods: tuple[str | None, ...],
     tile_sinks: dict[str | None, dict[int, np.ndarray]] | None = None,
 ) -> dict[str | None, np.ndarray]:
-    """:func:`_assemble_plane` for several z methods at once.
+    """Assemble one channel's files for a single timepoint, once per z method.
 
-    Each tile's z-slices are read once and projected by every method in
+    Groups by z-slice and either z-projects (when multiple z and a method is
+    given) or stitches/loads. This is the per-(channel, timepoint) unit of
+    assembly; the caller stacks planes across timepoints when needed. Each
+    tile's z-slices are read once and projected by every method in
     ``methods``. Returns ``{method: plane}``; without a z-series every method
-    maps to the same loaded plane. ``tile_sinks`` maps a method to its sink.
+    maps to the same loaded plane.
+
+    ``tile_sinks`` (registered overlap path only) maps a method to a dict that
+    is populated with the per-tile 2D arrays (0-based tile index -> array) at
+    the post-z-projection, *pre-creation_bin* plane, so the caller can register
+    on them and re-stitch with solved offsets.
+
+    Z-stack mosaics are projected *per tile first*, then the 2D projections are
+    stitched exactly like ordinary 2D data. For the 0%-overlap grid path this
+    is byte-identical to projecting after stitching (projection commutes with
+    disjoint edge-to-edge placement -- each output pixel comes from a single
+    tile).
     """
     sinks = tile_sinks or {}
     z_groups = _group_by_z(files)
@@ -1489,46 +1531,17 @@ def _assemble_planes(
     return {m: plane for m in methods}
 
 
-def _assemble_plane(
-    files: list,
-    tile_config: TileConfig | None,
-    z_project_method: str | None,
-    tile_sink: dict[int, np.ndarray] | None = None,
-) -> np.ndarray:
-    """Assemble one channel's files for a single timepoint into a 2D plane.
-
-    Groups by z-slice and either z-projects (when multiple z and a method is
-    given) or stitches/loads. This is the per-(channel, timepoint) unit of
-    assembly; the caller stacks planes across timepoints when needed.
-
-    ``tile_sink`` (registered overlap path only): when a dict is supplied it
-    is populated with the per-tile 2D arrays (0-based tile index → array) at
-    the post-z-projection, *pre-creation_bin* plane, so the caller can register
-    on them and re-stitch with solved offsets. ``None`` (default) leaves the
-    byte-identical grid path untouched.
-
-    Z-stack mosaics (``len(z_groups) > 1``) are projected *per tile first*: each
-    tile's z-series is collapsed to a 2D image, then those 2D projections are
-    stitched exactly like ordinary 2D data. This yields the per-tile 2D arrays
-    registration needs (they feed the sink), so overlap/registration works for
-    z-stacks too. For the 0%-overlap grid path this is byte-identical to
-    projecting after stitching (projection commutes with disjoint edge-to-edge
-    placement — each output pixel comes from a single tile).
-    """
-    z_groups = _group_by_z(files)
-    if len(z_groups) > 1 and z_project_method is not None:
-        projected = _project_tiles_over_z(files, z_project_method)
-        return _stitch_tile_arrays(projected, tile_config, tile_sink=tile_sink)
-    all_files = []
-    for z_key in sorted(z_groups.keys()):
-        all_files.extend(z_groups[z_key])
-    return _load_and_stitch(all_files, tile_config, tile_sink=tile_sink)
-
-
 def _project_tiles_over_z_multi(
     files: list, methods: tuple[str, ...]
 ) -> dict[str, dict[int, np.ndarray]]:
-    """:func:`_project_tiles_over_z` for several methods, reading each file once."""
+    """Collapse a z-stack mosaic to one 2D array per tile, for each method.
+
+    Groups ``files`` by tile token (files with no tile token group under index
+    0, the plain single-position z-stack), reads each tile's z-slices once and
+    projects them by every method (mip/mean/sum). Projection is
+    order-independent, so the z-slices need no sorting. Returns
+    ``{method: {tile_idx: 2D projected array}}``.
+    """
     tile_groups: dict[int, list] = defaultdict(list)
     for f in files:
         tile_groups[int(f.tokens.get("tile", "0"))].append(f)
@@ -1554,26 +1567,6 @@ def _z_tile_files(files: list) -> list[dict[int, Any]]:
             tiles = {k - base: v for k, v in tiles.items()}
         out.append(tiles)
     return out
-
-
-def _project_tiles_over_z(
-    files: list, method: str
-) -> dict[int, np.ndarray]:
-    """Collapse a z-stack mosaic to one 2D array per tile.
-
-    Groups ``files`` by tile token and z-projects each tile's z-series with
-    ``method`` (mip/mean/sum). Files with no tile token group under index 0 —
-    the plain single-position z-stack. Projection is order-independent, so the
-    z-slices need no sorting. Returns ``{tile_idx: 2D projected array}``.
-    """
-    tile_groups: dict[int, list] = defaultdict(list)
-    for f in files:
-        tile_groups[int(f.tokens.get("tile", "0"))].append(f)
-    projected: dict[int, np.ndarray] = {}
-    for tile_idx, tile_files in tile_groups.items():
-        z_slices = [read_tiff(str(f.path))["array"] for f in tile_files]
-        projected[tile_idx] = project_z(z_slices, method=method)
-    return projected
 
 
 def _load_and_stitch(
@@ -1603,7 +1596,7 @@ def _load_and_stitch(
         return _stitch_tile_arrays(tiles, tile_config, tile_sink=tile_sink)
 
     # Multiple files but no tile_config and no recognized z-slice tokens
-    # (the z-slice branch in _assemble_plane runs first when z tokens
+    # (the z-slice branch in _assemble_planes runs first when z tokens
     # are present). Silently returning files[0] used to land here and
     # discard the rest, which silently truncated multi-tile datasets to
     # a single tile. Raise instead so the caller has to be explicit.
@@ -1625,7 +1618,7 @@ def _stitch_tile_arrays(
     """Rebase a ``{tile_idx: 2D array}`` dict to 0-based, feed the sink, and stitch.
 
     Shared by the 2D file path (``_load_and_stitch``) and the z-projected mosaic
-    path (``_assemble_plane`` → ``_project_tiles_over_z``): both arrive at a
+    path (``_assemble_planes`` -> ``_project_tiles_over_z_multi``): both arrive at a
     tiles dict that needs identical rebasing, sink population, and grid
     placement, so the logic lives in one place.
 

@@ -93,6 +93,10 @@ def run_pipeline(
     # ── Load dataset ──
     load_uc = LoadDataset(repo, viewer, session)
     handle = load_uc.execute(h5_path)
+    # The Session labels measurements with its projection; make it the one
+    # the repository reads (legacy datasets list a pseudo-name instead).
+    if projection is not None and projection in session.projection_names:
+        session.set_active_projection(projection)
     logger.info(
         "Loaded: %s (%d channels)",
         handle.name,
