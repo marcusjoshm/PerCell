@@ -102,3 +102,41 @@ def test_size_estimate_accepts_numpy_ints():
 
     shape = tuple(np.int32(x) for x in (36, 3, 97, 1024, 1024))
     assert uncompressed_nbytes(shape, np.dtype("float32").itemsize) == 43_939_528_704
+
+
+# ── storage choice ─────────────────────────────────────────────
+
+
+def test_storage_choice_defaults_to_max_only():
+    from percell4.domain.io.projections import StorageChoice
+
+    choice = StorageChoice()
+    assert choice.projections == ("max",)
+    assert not choice.keep_zseries
+    assert choice.label == "max"
+
+
+def test_storage_choice_orders_and_labels():
+    from percell4.domain.io.projections import StorageChoice
+
+    choice = StorageChoice(projections=("sum", "max"), keep_zseries=True)
+    assert choice.projections == ("max", "sum")
+    assert choice.tokens == ("max", "sum", "zseries")
+    assert choice.label == "max, sum, z-series"
+
+
+def test_storage_choice_needs_something():
+    from percell4.domain.io.projections import StorageChoice
+
+    with pytest.raises(ValueError, match="at least one"):
+        StorageChoice(projections=())
+    assert StorageChoice(projections=(), keep_zseries=True).projections == ()
+
+
+def test_storage_choice_from_z_method_and_parse():
+    from percell4.domain.io.projections import StorageChoice
+
+    assert StorageChoice.from_z_method("mip") == StorageChoice(("max",))
+    assert StorageChoice.parse("zseries, MEAN") == StorageChoice(("mean",), True)
+    with pytest.raises(ValueError, match="unknown keep"):
+        StorageChoice.parse("max,median")

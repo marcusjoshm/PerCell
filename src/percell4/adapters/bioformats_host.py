@@ -412,6 +412,26 @@ class _Host:
             reader.close()
         self.conn.send(("done", req_id, None))
 
+    def stream(self, req_id, request: dict) -> None:
+        """Send every raw plane of one series, z innermost, one per message."""
+        reader, _ = _open(request["path"])
+        try:
+            reader.setSeries(int(request["series"]))
+            planes = _PlaneReader(reader)
+            size_z, size_t = int(reader.getSizeZ()), int(reader.getSizeT())
+            swap = bool(request.get("swap_zt"))
+            n_z, n_t = (size_t, size_z) if swap else (size_z, size_t)
+            channels = request.get("channels") or range(int(reader.getSizeC()))
+            for t in range(n_t):
+                for c in channels:
+                    for z in range(n_z):
+                        self.check_stop()
+                        plane = planes.read(t, c, z) if swap else planes.read(z, c, t)
+                        self.conn.send(("zplane", req_id, (t, int(c), z, plane)))
+        finally:
+            reader.close()
+        self.conn.send(("done", req_id, None))
+
     def plane(self, req_id, request: dict) -> None:
         reader, _ = _open(request["path"])
         try:
@@ -430,6 +450,7 @@ class _Host:
         handlers = {
             "probe": self.probe,
             "read": self.read,
+            "stream": self.stream,
             "plane": self.plane,
             "suffixes": self.suffixes,
         }

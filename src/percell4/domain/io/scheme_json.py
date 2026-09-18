@@ -27,6 +27,7 @@ from percell4.domain.io.infile import (
     ImportSource,
     SeriesProbe,
 )
+from percell4.domain.io.projections import StorageChoice
 
 __all__ = [
     "SCHEME_VERSION",
@@ -93,8 +94,12 @@ def _source_to_dict(src: ImportSource) -> dict[str, Any]:
 
 
 def to_dict(scheme: ImportScheme) -> dict[str, Any]:
-    """Encode ``scheme`` as plain JSON-ready data."""
-    return {
+    """Encode ``scheme`` as plain JSON-ready data.
+
+    ``storage`` is written only when the scheme sets one, so a scheme that
+    keeps one projection by ``z_method`` encodes exactly as before.
+    """
+    data: dict[str, Any] = {
         "version": scheme.version,
         "z_method": scheme.z_method,
         "sources": [_source_to_dict(s) for s in scheme.sources],
@@ -104,6 +109,9 @@ def to_dict(scheme: ImportScheme) -> dict[str, Any]:
         ],
         "warnings": list(scheme.warnings),
     }
+    if scheme.storage is not None:
+        data["storage"] = {"keep": list(scheme.storage.tokens)}
+    return data
 
 
 def dumps(scheme: ImportScheme) -> str:
@@ -201,6 +209,7 @@ def from_dict(data: dict[str, Any]) -> ImportScheme:
     z_method = data.get("z_method", "mip")
     if z_method not in Z_METHODS:
         raise ImportSchemeError(f"unknown z method {z_method!r}, expected one of {Z_METHODS}")
+    storage = _storage_from_dict(data.get("storage"))
     try:
         sources = tuple(_source_from_dict(s) for s in data.get("sources", ()))
         excluded = tuple(_excluded_from_dict(e) for e in data.get("excluded", ()))
@@ -215,7 +224,21 @@ def from_dict(data: dict[str, Any]) -> ImportScheme:
         sources=sources,
         excluded=excluded,
         warnings=warnings,
+        storage=storage,
     )
+
+
+def _storage_from_dict(raw: Any) -> StorageChoice | None:
+    """The optional ``storage`` block; absent means one projection by z method."""
+    if raw is None:
+        return None
+    try:
+        keep = raw["keep"]
+        if isinstance(keep, str) or not all(isinstance(k, str) for k in keep):
+            raise TypeError("keep must be a list of names")
+        return StorageChoice.parse(",".join(keep))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ImportSchemeError(f"malformed storage: {exc}") from exc
 
 
 def loads(text: str) -> ImportScheme:

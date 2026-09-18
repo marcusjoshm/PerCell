@@ -77,8 +77,8 @@ def test_each_infile_entry_imports_its_own_source_once(tmp_path, fake_shared_rea
         results = [compress_one(e) for e in entries]
 
     assert not legacy.called
-    assert [len(reader.read_calls)] == [3]
-    assert [src.path.name for src, _z in reader.read_calls] == ["a.tif", "b.tif", "c.tif"]
+    assert [len(reader.stream_calls)] == [3]
+    assert [src.path.name for src in reader.stream_calls] == ["a.tif", "b.tif", "c.tif"]
     for updated, failure, _msg in results:
         assert failure is None
         assert updated.source is DatasetSource.H5_EXISTING

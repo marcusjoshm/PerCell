@@ -33,6 +33,10 @@ IsCancelled = Callable[[], bool]
 #: One projected plane: ``(t, c, plane)``. ``plane`` is float32 ``(H, W)``.
 ProjectedPlane = tuple[int, int, NDArray[np.float32]]
 
+#: One raw z-plane: ``(t, c, z, plane)``. ``plane`` is ``(H, W)`` in the
+#: file's own pixel type.
+RawPlane = tuple[int, int, int, NDArray]
+
 
 @runtime_checkable
 class ImageReader(Protocol):
@@ -72,6 +76,25 @@ class ImageReader(Protocol):
         :data:`percell4.domain.io.infile.Z_METHODS`. Max keeps the native
         values, sum and mean accumulate in float64, and every plane is
         returned as float32 ``(H, W)``.
+
+        When ``is_cancelled`` returns True the iterator ends early.
+        """
+        ...
+
+    def read_planes(
+        self,
+        source: ImportSource,
+        on_plane: OnPlane | None = None,
+        is_cancelled: IsCancelled | None = None,
+    ) -> Iterator[RawPlane]:
+        """Stream every raw plane of one series, z innermost.
+
+        The axis map is applied first. Planes come in ``t``, then ``c``, then
+        ``z`` order whatever the file's dimension order, so a caller can
+        project each (t, c) stack as it arrives while holding one plane per
+        projection. ``c`` follows ``source.channel_indices`` as in
+        :meth:`read_projected`. ``on_plane(t, c)`` is called once per stack,
+        before its first plane is yielded.
 
         When ``is_cancelled`` returns True the iterator ends early.
         """

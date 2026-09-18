@@ -30,7 +30,13 @@ from percell4.domain.io.infile import (
     ImportSource,
     SeriesProbe,
 )
-from percell4.ports.image_reader import IsCancelled, OnFile, OnPlane, ProjectedPlane
+from percell4.ports.image_reader import (
+    IsCancelled,
+    OnFile,
+    OnPlane,
+    ProjectedPlane,
+    RawPlane,
+)
 
 ERROR_NO_PROBE = "fake reader: no probe for this file"
 
@@ -98,6 +104,7 @@ class FakeImageReader:
         self._arrays = {(Path(k[0]), k[1]): np.asarray(v) for k, v in (arrays or {}).items()}
         self.probe_calls: list[list[Path]] = []
         self.read_calls: list[tuple[ImportSource, str]] = []
+        self.stream_calls: list[ImportSource] = []
         self.closed = False
 
     def probe(
@@ -147,6 +154,37 @@ class FakeImageReader:
                 if on_plane is not None:
                     on_plane(t, c)
                 yield t, c, plane
+
+    def _source_array(self, source: ImportSource) -> np.ndarray:
+        key = (Path(source.path), source.series_index)
+        if key not in self._arrays:
+            raise KeyError(f"fake reader has no array for {key}")
+        array = self._arrays[key]  # T, C, Z, Y, X
+        if not source.axis_map.is_identity:
+            array = array.transpose(2, 1, 0, 3, 4)
+        return array
+
+    def read_planes(
+        self,
+        source: ImportSource,
+        on_plane: OnPlane | None = None,
+        is_cancelled: IsCancelled | None = None,
+    ) -> Iterator[RawPlane]:
+        self.stream_calls.append(source)
+        array = self._source_array(source)
+        channels = source.channel_indices or tuple(range(array.shape[1]))
+        return self._iterate_raw(array, channels, on_plane, is_cancelled)
+
+    @staticmethod
+    def _iterate_raw(array, channels, on_plane, is_cancelled):
+        for t in range(array.shape[0]):
+            for c in channels:
+                for z in range(array.shape[2]):
+                    if is_cancelled is not None and is_cancelled():
+                        return
+                    if z == 0 and on_plane is not None:
+                        on_plane(t, c)
+                    yield t, c, z, array[t, c, z]
 
     def close(self) -> None:
         self.closed = True

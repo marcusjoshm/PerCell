@@ -193,6 +193,99 @@ def _decode_names(raw: Any) -> tuple[str, ...]:
     return tuple(n.decode() if isinstance(n, bytes) else str(n) for n in raw)
 
 
+def projection_layout(n_t: int, n_c: int) -> list[str]:
+    """``dims`` of an intensity array for ``n_t`` timepoints and ``n_c`` channels.
+
+    A single axis is dropped: ``(H, W)``, ``(C, H, W)``, ``(T, H, W)`` or
+    ``(T, C, H, W)``, the layouts every intensity reader accepts.
+    """
+    dims = []
+    if n_t > 1:
+        dims.append("T")
+    if n_c > 1:
+        dims.append("C")
+    return dims + ["H", "W"]
+
+
+class _StackWriter:
+    """Creates and fills pre-allocated arrays in one open file (see
+    :meth:`DatasetStore.open_stack_writer`)."""
+
+    def __init__(self, store: DatasetStore, f: h5py.File) -> None:
+        self._store = store
+        self._f = f
+        self.created: list[str] = []
+
+    def begin_zseries(
+        self, shape: tuple[int, ...], channel_names: list[str]
+    ) -> _ZSeriesWriter:
+        """Pre-allocate the z-series (see :meth:`DatasetStore.zseries_writer`)."""
+        shape = tuple(int(x) for x in shape)
+        if len(shape) not in (4, 5):
+            raise ValueError(f"z-series shape must be (C,Z,H,W) or (T,C,Z,H,W), got {shape}")
+        if len(channel_names) != shape[-4]:
+            raise ValueError(
+                f"{len(channel_names)} channel name(s) for {shape[-4]} z-series channel(s)"
+            )
+        f = self._f
+        if ZSERIES_PATH in f:
+            del f[ZSERIES_PATH]
+        h, w = shape[-2:]
+        self._store._check_xy(f, (h, w), "The z-series")
+        chunks = (1,) * (len(shape) - 2) + (
+            min(h, _ZSERIES_CHUNK_EDGE),
+            min(w, _ZSERIES_CHUNK_EDGE),
+        )
+        ds = f.create_dataset(
+            ZSERIES_PATH, shape=shape, dtype=np.float32, chunks=chunks,
+            **_compression_kwargs(),
+        )
+        self.created.append(ZSERIES_PATH)
+        ds.attrs["dims"] = ["T", "C", "Z", "H", "W"][5 - len(shape):]
+        ds.attrs["channel_names"] = list(channel_names)
+        return _ZSeriesWriter(ds)
+
+    def begin_projection(
+        self, name: str, n_t: int, n_c: int, hw: tuple[int, int]
+    ) -> _ProjectionWriter:
+        """Pre-allocate the named projection for ``n_t`` x ``n_c`` planes."""
+        if name not in PROJECTION_NAMES:
+            raise ValueError(
+                f"unknown projection {name!r}, expected one of {PROJECTION_NAMES}"
+            )
+        f = self._f
+        path = f"{PROJECTIONS_GROUP}/{name}"
+        if path in f:
+            del f[path]
+        h, w = int(hw[0]), int(hw[1])
+        self._store._check_xy(f, (h, w), f"The {name} projection")
+        dims = projection_layout(n_t, n_c)
+        shape = tuple(
+            {"T": n_t, "C": n_c, "H": h, "W": w}[d] for d in dims
+        )
+        ds = f.create_dataset(
+            path, shape=shape, dtype=np.float32, chunks=_choose_chunks(shape),
+            **_compression_kwargs(),
+        )
+        self.created.append(path)
+        ds.attrs["dims"] = dims
+        return _ProjectionWriter(ds, dims)
+
+
+class _ProjectionWriter:
+    """Fills a pre-allocated projection one (t, c) plane at a time."""
+
+    def __init__(self, ds: h5py.Dataset, dims: list[str]) -> None:
+        self._ds = ds
+        self._timed = "T" in dims
+        self._channels = "C" in dims
+
+    def write_plane(self, t: int, c: int, plane: NDArray) -> None:
+        """Write the plane of timepoint ``t`` and channel position ``c``."""
+        index = ((t,) if self._timed else ()) + ((c,) if self._channels else ())
+        self._ds[index] = np.asarray(plane, dtype=np.float32)
+
+
 class _ZSeriesWriter:
     """Fills a pre-allocated z-series one plane at a time (see
     :meth:`DatasetStore.zseries_writer`)."""
@@ -1259,6 +1352,27 @@ class DatasetStore:
         return rewritten
 
     @contextmanager
+    def open_stack_writer(self):
+        """Yield a writer that pre-allocates projections and a z-series and
+        fills them plane by plane, under one open file handle.
+
+        Used by imports, which stream planes: nothing is assembled in memory.
+        If the block raises, every array the writer created is removed.
+        """
+        with h5py.File(self.path, "a") as f:
+            writer = _StackWriter(self, f)
+            try:
+                yield writer
+            except BaseException:
+                for path in writer.created:
+                    if path in f:
+                        del f[path]
+                grp = f.get(PROJECTIONS_GROUP)
+                if isinstance(grp, h5py.Group) and not len(grp):
+                    del f[PROJECTIONS_GROUP]
+                raise
+
+    @contextmanager
     def zseries_writer(self, shape: tuple[int, ...], channel_names: list[str]):
         """Pre-allocate the z-series and yield a writer that fills it plane by plane.
 
@@ -1268,37 +1382,8 @@ class DatasetStore:
         Any existing z-series is replaced. If the block raises, the partial
         z-series is removed. The file stays open for the block.
         """
-        shape = tuple(int(x) for x in shape)
-        if len(shape) not in (4, 5):
-            raise ValueError(f"z-series shape must be (C,Z,H,W) or (T,C,Z,H,W), got {shape}")
-        if len(channel_names) != shape[-4]:
-            raise ValueError(
-                f"{len(channel_names)} channel name(s) for {shape[-4]} z-series channel(s)"
-            )
-        dims = ["T", "C", "Z", "H", "W"][5 - len(shape):]
-        h, w = shape[-2:]
-        chunks = (1,) * (len(shape) - 2) + (
-            min(h, _ZSERIES_CHUNK_EDGE),
-            min(w, _ZSERIES_CHUNK_EDGE),
-        )
-        with h5py.File(self.path, "a") as f:
-            if ZSERIES_PATH in f:
-                del f[ZSERIES_PATH]
-            self._check_xy(f, (h, w), "The z-series")
-            ds = f.create_dataset(
-                ZSERIES_PATH,
-                shape=shape,
-                dtype=np.float32,
-                chunks=chunks,
-                **_compression_kwargs(),
-            )
-            ds.attrs["dims"] = dims
-            ds.attrs["channel_names"] = list(channel_names)
-            try:
-                yield _ZSeriesWriter(ds)
-            except BaseException:
-                del f[ZSERIES_PATH]
-                raise
+        with self.open_stack_writer() as stack:
+            yield stack.begin_zseries(shape, channel_names)
 
     def has_zseries(self) -> bool:
         """True when the dataset stores a z-series. Metadata only."""

@@ -136,7 +136,8 @@ def _import_all(
         for src, target in targets:
             try:
                 import_infile_dataset(
-                    src, target, reader, z_method=scheme.z_method, output_dir=output_dir
+                    src, target, reader, z_method=scheme.z_method, output_dir=output_dir,
+                    storage=scheme.storage,
                 )
             except PercellError as exc:
                 failed += 1

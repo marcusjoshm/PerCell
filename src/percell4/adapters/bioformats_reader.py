@@ -36,7 +36,7 @@ from percell4.domain.errors import (
     JavaUnavailableError,
 )
 from percell4.domain.io.infile import Z_METHODS, FileProbe, ImportSource, SeriesProbe
-from percell4.ports.image_reader import IsCancelled, OnFile, OnPlane, ProjectedPlane
+from percell4.ports.image_reader import IsCancelled, OnFile, OnPlane, ProjectedPlane, RawPlane
 
 logger = logging.getLogger(__name__)
 
@@ -473,14 +473,37 @@ class BioformatsReader:
             "swap_zt": not source.axis_map.is_identity,
             "z_method": z_method,
         }
-        return self._stream(source.path, request, on_plane, is_cancelled or _never_cancelled)
+        return self._stream(
+            source.path, "read", request, on_plane, is_cancelled or _never_cancelled
+        )
 
-    def _stream(self, path, request, on_plane, is_cancelled) -> Iterator[ProjectedPlane]:
+    def read_planes(
+        self,
+        source: ImportSource,
+        on_plane: OnPlane | None = None,
+        is_cancelled: IsCancelled | None = None,
+    ) -> Iterator[RawPlane]:
+        """Stream raw planes, z innermost. See :meth:`ImageReader.read_planes`.
+
+        Errors behave as in :meth:`read_projected`.
+        """
+        self._resolve()
+        request = {
+            "path": str(Path(source.path).absolute()),
+            "series": int(source.series_index),
+            "channels": [int(c) for c in source.channel_indices],
+            "swap_zt": not source.axis_map.is_identity,
+        }
+        return self._stream(
+            source.path, "stream", request, on_plane, is_cancelled or _never_cancelled
+        )
+
+    def _stream(self, path, op, request, on_plane, is_cancelled) -> Iterator[Any]:
         yielded = False
         for attempt in (1, 2):
             if not self._ensure_child(is_cancelled):
                 return
-            messages = self._messages("read", request, is_cancelled)
+            messages = self._messages(op, request, is_cancelled)
             try:
                 for kind, body in messages:
                     if kind == "plane":
@@ -489,6 +512,12 @@ class BioformatsReader:
                             on_plane(t, c)
                         yielded = True
                         yield t, c, plane
+                    elif kind == "zplane":
+                        t, c, z, plane = body
+                        if z == 0 and on_plane is not None:
+                            on_plane(t, c)
+                        yielded = True
+                        yield t, c, z, plane
                 return
             except _CancelledError:
                 return

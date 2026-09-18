@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from percell4.domain.io.models import DiscoveryMode
+from percell4.domain.io.projections import StorageChoice
 from percell4.io.paths import drop_sidecars
 
 # ---------------------------------------------------------------------------
@@ -257,6 +258,15 @@ class ImportScheme:
     sources: tuple[ImportSource, ...] = ()
     excluded: tuple[ExcludedEntry, ...] = ()
     warnings: tuple[str, ...] = ()
+    #: What the import keeps. ``None`` (every scheme written before storage
+    #: choices existed) keeps one projection by ``z_method``.
+    storage: StorageChoice | None = None
+
+    @property
+    def storage_choice(self) -> StorageChoice:
+        """The storage in effect: :attr:`storage`, else one projection by
+        :attr:`z_method`."""
+        return self.storage or StorageChoice.from_z_method(self.z_method)
 
     @property
     def importable_sources(self) -> tuple[ImportSource, ...]:

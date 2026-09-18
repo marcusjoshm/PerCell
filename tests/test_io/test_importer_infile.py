@@ -76,7 +76,8 @@ def test_intensity_dims_attr_matches_layout(tmp_path):
     out = tmp_path / "a.h5"
     import_infile_dataset(source, out, reader)
     with h5py.File(out, "r") as f:
-        assert list(f["intensity"].attrs["dims"]) == ["C", "H", "W"]
+        assert "intensity" not in f  # new imports store named projections (KTD1)
+        assert list(f["projections/max"].attrs["dims"]) == ["C", "H", "W"]
 
 
 def test_tzcyx_imports_as_tchw_with_timepoints(tmp_path):
@@ -196,7 +197,7 @@ def test_reader_failure_leaves_no_output_or_temp(tmp_path):
     def broken(*_a, **_k):
         raise BoomError("plane read failed")
 
-    reader.read_projected = broken
+    reader.read_planes = broken
     out = tmp_path / "a.h5"
     with pytest.raises(BoomError):
         import_infile_dataset(source, out, reader)
@@ -273,3 +274,157 @@ def test_store_metadata_returns_plain_types_for_infile_keys(tmp_path):
     assert type(meta["z_spacing_um"]) is float
     assert type(meta["source_series"]) is int
     assert type(meta["z_projection"]) is str
+
+
+# ── storage choice: z-series and several projections (z-stack plan U2) ──
+
+
+def _storage(*tokens):
+    from percell4.domain.io.projections import StorageChoice
+
+    return StorageChoice.parse(",".join(tokens))
+
+
+def test_zseries_max_and_mean_in_one_read(tmp_path):
+    stack = _stack(c=2, z=4)
+    source, reader = _source_for(tmp_path / "a.tif", stack)
+    out = tmp_path / "a.h5"
+
+    import_infile_dataset(source, out, reader, storage=_storage("max", "mean", "zseries"))
+
+    store = DatasetStore(out)
+    assert store.list_projections() == ("max", "mean")
+    assert store.zseries_shape() == (2, 4, 16, 20)
+    assert store.zseries_channels() == ("ch0", "ch1")
+    for c in range(2):
+        for z in range(4):
+            np.testing.assert_array_equal(
+                store.read_zseries_plane(0, c, z), stack[0, c, z].astype(np.float32)
+            )
+    np.testing.assert_array_equal(
+        DatasetStore(out, projection="max").read_array("intensity"),
+        stack[0].max(axis=1).astype(np.float32),
+    )
+    np.testing.assert_allclose(
+        DatasetStore(out, projection="mean").read_array("intensity"),
+        stack[0].astype(np.float64).mean(axis=1).astype(np.float32),
+        rtol=1e-6,
+    )
+    # one streaming read; the per-projection read is never used
+    assert len(reader.stream_calls) == 1
+    assert reader.read_calls == []
+    assert "z_projection" not in store.metadata
+
+
+def test_zseries_only_is_view_only(tmp_path):
+    source, reader = _source_for(tmp_path / "a.tif", _stack(c=2, z=3))
+    out = tmp_path / "a.h5"
+    import_infile_dataset(source, out, reader, storage=_storage("zseries"))
+    store = DatasetStore(out)
+    assert store.list_projections() == ()
+    assert store.has_zseries()
+    assert not store.array_exists("intensity")
+    assert store.metadata["native_shape"] == (16, 20)
+
+
+def test_time_lapse_keeps_tczyx_zseries(tmp_path):
+    stack = _stack(t=3, c=2, z=4)
+    source, reader = _source_for(tmp_path / "a.tif", stack)
+    out = tmp_path / "a.h5"
+    import_infile_dataset(source, out, reader, storage=_storage("sum", "zseries"))
+    store = DatasetStore(out)
+    assert store.zseries_shape() == (3, 2, 4, 16, 20)
+    assert store.zseries_dims() == ("T", "C", "Z", "H", "W")
+    assert store.metadata["n_timepoints"] == 3
+    np.testing.assert_array_equal(store.read_zseries_plane(2, 1, 3), stack[2, 1, 3])
+    np.testing.assert_allclose(
+        store.read_array("intensity"),
+        stack.astype(np.float64).sum(axis=2).astype(np.float32),
+    )
+
+
+def test_cancel_mid_stream_with_zseries_leaves_nothing(tmp_path):
+    source, reader = _source_for(tmp_path / "a.tif", _stack(c=3, z=5))
+    out = tmp_path / "a.h5"
+    calls = {"n": 0}
+
+    def cancelled():
+        calls["n"] += 1
+        return calls["n"] > 7
+
+    with pytest.raises(ImportCancelledError):
+        import_infile_dataset(
+            source, out, reader, is_cancelled=cancelled,
+            storage=_storage("max", "zseries"),
+        )
+    assert not out.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+@pytest.mark.parametrize("z_method", ["mip", "mean", "sum"])
+@pytest.mark.parametrize("creation_bin", [1, 2])
+def test_default_storage_matches_the_projected_read(tmp_path, z_method, creation_bin):
+    """A scheme without storage keys imports exactly what read_projected gave."""
+    from tests.fakes.fake_image_reader import project
+
+    from percell4.domain.io.view_bin import sum_bin_2d
+
+    stack = _stack(t=2, c=2, z=5)
+    source, reader = _source_for(tmp_path / "a.tif", stack)
+    out = tmp_path / "a.h5"
+    import_infile_dataset(source, out, reader, z_method=z_method, creation_bin=creation_bin)
+
+    expected = np.stack([
+        np.stack([
+            sum_bin_2d(project(stack[t, c], z_method), creation_bin) for c in range(2)
+        ])
+        for t in range(2)
+    ]).astype(np.float32)
+    store = DatasetStore(out)
+    assert store.list_projections() == ({"mip": "max"}.get(z_method, z_method),)
+    np.testing.assert_array_equal(store.read_array("intensity"), expected)
+    assert store.metadata["z_projection"] == z_method
+
+
+def test_binned_zseries_planes_are_sum_binned(tmp_path):
+    from percell4.domain.io.view_bin import sum_bin_2d
+
+    stack = _stack(c=1, z=3)
+    source, reader = _source_for(tmp_path / "a.tif", stack)
+    out = tmp_path / "a.h5"
+    import_infile_dataset(source, out, reader, creation_bin=2,
+                          storage=_storage("max", "zseries"))
+    store = DatasetStore(out)
+    assert store.zseries_shape() == (1, 3, 8, 10)
+    np.testing.assert_array_equal(
+        store.read_zseries_plane(0, 0, 1), sum_bin_2d(stack[0, 0, 1].astype(np.float32), 2)
+    )
+
+
+def test_sum_of_many_bright_uint16_planes_does_not_overflow(tmp_path):
+    stack = np.full((1, 1, 40, 4, 4), 60000, dtype=np.uint16)
+    source, reader = _source_for(tmp_path / "a.tif", stack)
+    out = tmp_path / "a.h5"
+    import_infile_dataset(source, out, reader, storage=_storage("sum", "mean"))
+    np.testing.assert_array_equal(
+        DatasetStore(out, projection="sum").read_array("intensity"),
+        np.full((4, 4), 2_400_000, dtype=np.float32),
+    )
+    np.testing.assert_array_equal(
+        DatasetStore(out, projection="mean").read_array("intensity"),
+        np.full((4, 4), 60000, dtype=np.float32),
+    )
+
+
+def test_projector_holds_one_plane_per_projection():
+    from percell4.adapters.importer import _StackProjector
+
+    acc = _StackProjector(("max", "mean", "sum"))
+    for z in range(30):
+        acc.add(np.full((8, 8), z, dtype=np.uint16))
+        held = [a for a in (acc._max, acc._total) if a is not None]
+        assert len(held) == 2 and all(a.shape == (8, 8) for a in held)
+    out = acc.finish()
+    assert float(out["max"][0, 0]) == 29
+    assert float(out["sum"][0, 0]) == sum(range(30))
+    assert float(out["mean"][0, 0]) == pytest.approx(14.5)

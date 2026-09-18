@@ -37,6 +37,7 @@ from percell4.domain.io.models import (
     ZeroPadOffsetRule,
 )
 from percell4.domain.io.naming import channel_display_name
+from percell4.domain.io.projections import StorageChoice, method_for_projection
 from percell4.domain.io.scanner import FileScanner
 from percell4.domain.io.timepoints import (
     count_timepoints,
@@ -1067,13 +1068,21 @@ def import_infile_dataset(
     on_plane: Callable[[int, int], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
     output_dir: str | Path | None = None,
+    storage: StorageChoice | None = None,
 ) -> int:
     """Import one in-file source (a file's series) into a new ``.h5``.
 
-    The reader streams one Z-projected ``(H, W)`` plane per (timepoint,
-    channel). The planes use the store's existing layouts: ``(H, W)``,
-    ``(C, H, W)``, ``(T, H, W)`` or ``(T, C, H, W)`` float32. Channel tokens
-    are the file's channel indices, named through ``channel_display_name``.
+    The reader streams every raw plane once, z innermost. Each plane goes
+    into the z-series when ``storage`` keeps it, and into the accumulators
+    of the kept projections; nothing larger than one plane per projection is
+    held in memory. ``storage`` defaults to one projection by ``z_method``,
+    the import made before storage choices existed.
+
+    Projections are named arrays in the store's existing layouts: ``(H, W)``,
+    ``(C, H, W)``, ``(T, H, W)`` or ``(T, C, H, W)`` float32. They are
+    projected at full resolution and then binned by ``creation_bin``; z-series
+    planes are binned one by one. Channel tokens are the file's channel
+    indices, named through ``channel_display_name``.
 
     The file is written to a temporary path beside ``output_h5`` and moved
     into place only when complete, so cancel or failure leaves no dataset
@@ -1115,43 +1124,27 @@ def import_infile_dataset(
     ):
         raise ImportSchemeError(f"{path.name} changed since it was scanned; scan it again")
 
+    choice = storage or StorageChoice.from_z_method(z_method)
     channels = tuple(source.channel_indices) or tuple(range(series.channel_count))
+    names = [channel_display_name(str(c)) for c in channels]
     n_t = max(1, int(series.size_t))
+    n_z = max(1, int(series.size_z))
+    height = int(series.size_y) // creation_bin
+    width = int(series.size_x) // creation_bin
     cancelled = is_cancelled or (lambda: False)
-
-    planes: dict[tuple[int, int], np.ndarray] = {}
-    for t, c, plane in reader.read_projected(
-        source, z_method, on_plane=on_plane, is_cancelled=cancelled
-    ):
-        if creation_bin > 1:
-            plane = sum_bin_2d(plane, creation_bin)
-        planes[(int(t), int(c))] = np.asarray(plane, dtype=np.float32)
-    if cancelled() or len(planes) != n_t * len(channels):
-        raise ImportCancelledError(f"import of {path.name} was cancelled")
-
-    per_t = [np.stack([planes[(t, c)] for c in channels], axis=0) for t in range(n_t)]
-    if n_t > 1:
-        intensity = np.stack(per_t, axis=0)  # (T, C, H, W)
-        dims = ["T", "C", "H", "W"]
-        if len(channels) == 1:
-            intensity, dims = intensity[:, 0], ["T", "H", "W"]
-    else:
-        intensity, dims = per_t[0], ["C", "H", "W"]
-        if len(channels) == 1:
-            intensity, dims = intensity[0], ["H", "W"]
-    height, width = intensity.shape[-2:]
 
     all_metadata: dict[str, Any] = {
         "source_dir": str(path.parent),
         "source_file": str(path),
         "source_series": int(source.series_index),
-        "channel_names": [channel_display_name(str(c)) for c in channels],
+        "channel_names": names,
         "n_channels": len(channels),
         "creation_bin": int(creation_bin),
         "n_timepoints": n_t,
-        "native_shape": (int(height), int(width)),
-        "z_projection": z_method,
+        "native_shape": (height, width),
     }
+    if len(choice.projections) == 1:
+        all_metadata["z_projection"] = method_for_projection(choice.projections[0])
     if series.physical_x_um is not None and series.physical_x_um > 0:
         all_metadata["pixel_size_um"] = float(series.physical_x_um) * int(creation_bin)
     if series.physical_z_um is not None and series.physical_z_um > 0:
@@ -1159,13 +1152,57 @@ def import_infile_dataset(
     if metadata:
         all_metadata.update(metadata)
 
-    _write_atomically(
-        output_h5,
-        lambda store: (
-            store.create(metadata=all_metadata),
-            store.write_array("intensity", intensity, attrs={"dims": dims}),
-        ),
-    )
+    def build(store: DatasetStore) -> None:
+        store.create(metadata=all_metadata)
+        with store.open_stack_writer() as stack:
+            zseries = None
+            if choice.keep_zseries:
+                shape = ((n_t,) if n_t > 1 else ()) + (len(channels), n_z, height, width)
+                zseries = stack.begin_zseries(shape, names)
+            projections = {
+                name: stack.begin_projection(name, n_t, len(channels), (height, width))
+                for name in choice.projections
+            }
+            accumulator = _StackProjector(choice.projections)
+            position = {c: i for i, c in enumerate(channels)}
+            stacks_done = 0
+            planes_read = 0
+            current: tuple[int, int] | None = None
+
+            def finish(key: tuple[int, int]) -> None:
+                t, c = key
+                for name, image in accumulator.finish().items():
+                    if creation_bin > 1:
+                        image = sum_bin_2d(image, creation_bin)
+                    projections[name].write_plane(t, position[c], image)
+
+            for t, c, z, plane in reader.read_planes(
+                source, on_plane=on_plane, is_cancelled=cancelled
+            ):
+                key = (int(t), int(c))
+                if key != current:
+                    if current is not None:
+                        finish(current)
+                        stacks_done += 1
+                    current = key
+                if zseries is not None:
+                    binned = np.asarray(plane, dtype=np.float32)
+                    if creation_bin > 1:
+                        binned = sum_bin_2d(binned, creation_bin)
+                    zseries.write_plane(key[0], position[key[1]], int(z), binned)
+                accumulator.add(plane)
+                planes_read += 1
+            if current is not None and not cancelled():
+                finish(current)
+                stacks_done += 1
+            if (
+                cancelled()
+                or stacks_done != n_t * len(channels)
+                or planes_read != n_t * len(channels) * n_z
+            ):
+                raise ImportCancelledError(f"import of {path.name} was cancelled")
+
+    _write_atomically(output_h5, build)
 
     if project_csv is not None:
         idx = ProjectIndex(project_csv)
@@ -1173,6 +1210,49 @@ def import_infile_dataset(
             idx.create()
         idx.add_dataset(str(output_h5), status="complete")
     return len(channels)
+
+
+class _StackProjector:
+    """Projects one (t, c) z-stack as its planes arrive, one plane at a time.
+
+    Holds one image per kept projection at most: max keeps the native dtype
+    (as the reader's own projection does); sum and mean share one float64
+    accumulator. :meth:`finish` returns float32 images and resets.
+    """
+
+    def __init__(self, projections: tuple[str, ...]) -> None:
+        self._want_max = "max" in projections
+        self._want_total = "mean" in projections or "sum" in projections
+        self._projections = projections
+        self._max: np.ndarray | None = None
+        self._total: np.ndarray | None = None
+        self._count = 0
+
+    def add(self, plane: np.ndarray) -> None:
+        if self._want_max:
+            if self._max is None:
+                self._max = np.array(plane, copy=True)
+            else:
+                np.maximum(self._max, plane, out=self._max)
+        if self._want_total:
+            if self._total is None:
+                self._total = np.asarray(plane, dtype=np.float64).copy()
+            else:
+                self._total += plane
+        self._count += 1
+
+    def finish(self) -> dict[str, np.ndarray]:
+        out: dict[str, np.ndarray] = {}
+        for name in self._projections:
+            if name == "max":
+                out[name] = self._max.astype(np.float32)
+            elif name == "sum":
+                out[name] = self._total.astype(np.float32)
+            else:
+                out[name] = (self._total / self._count).astype(np.float32)
+        self._max = self._total = None
+        self._count = 0
+        return out
 
 
 def _write_atomically(output_h5: Path, build: Callable[[DatasetStore], Any]) -> None:

@@ -166,3 +166,43 @@ def test_single_source_round_trips_and_rejects_bad_names():
         source_from_dict(bad)
     with pytest.raises(ImportSchemeError):
         source_from_dict(["not", "a", "dict"])
+
+
+# ── storage choice (z-stack plan U2) ──────────────────────────
+
+
+def test_storage_round_trips():
+    from percell4.domain.io import scheme_json
+    from percell4.domain.io.infile import ImportScheme
+    from percell4.domain.io.projections import StorageChoice
+
+    scheme = ImportScheme(storage=StorageChoice(("max", "mean"), keep_zseries=True))
+    data = scheme_json.to_dict(scheme)
+    assert data["storage"] == {"keep": ["max", "mean", "zseries"]}
+    assert scheme_json.from_dict(data).storage == scheme.storage
+
+
+def test_scheme_without_storage_encodes_as_before_and_keeps_z_method():
+    from percell4.domain.io import scheme_json
+    from percell4.domain.io.infile import ImportScheme
+    from percell4.domain.io.projections import StorageChoice
+
+    data = scheme_json.to_dict(ImportScheme(z_method="mean"))
+    assert "storage" not in data
+    loaded = scheme_json.from_dict(data)
+    assert loaded.storage is None
+    assert loaded.storage_choice == StorageChoice(("mean",))
+
+
+def test_malformed_storage_is_rejected():
+    import pytest
+
+    from percell4.domain.errors import ImportSchemeError
+    from percell4.domain.io import scheme_json
+    from percell4.domain.io.infile import ImportScheme
+
+    data = scheme_json.to_dict(ImportScheme())
+    for bad in ({"keep": ["median"]}, {"keep": "max"}, {}, {"keep": []}):
+        data["storage"] = bad
+        with pytest.raises(ImportSchemeError, match="storage"):
+            scheme_json.from_dict(data)

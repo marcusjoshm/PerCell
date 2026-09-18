@@ -191,6 +191,53 @@ def test_cancel_mid_probe_ends_the_call_and_kills_the_child(tmp_path):
         reader.close()
 
 
+def test_fake_reader_streams_raw_planes_z_innermost(tmp_path):
+    stack = np.arange(2 * 3 * 4 * 5 * 6, dtype=np.uint16).reshape(2, 3, 4, 5, 6)
+    path = tmp_path / "a.tif"
+    probe = probe_for(path, stack)
+    reader = FakeImageReader([probe], arrays={(path, 0): stack})
+    stacks: list[tuple[int, int]] = []
+    source = _source(probe, channel_indices=(2, 0))
+    planes = list(reader.read_planes(source, lambda t, c: stacks.append((t, c))))
+    assert [(t, c, z) for t, c, z, _ in planes] == [
+        (t, c, z) for t in range(2) for c in (2, 0) for z in range(4)
+    ]
+    assert stacks == [(0, 2), (0, 0), (1, 2), (1, 0)]
+    for t, c, z, plane in planes:
+        assert plane.dtype == np.uint16
+        np.testing.assert_array_equal(plane, stack[t, c, z])
+
+
+def test_stream_crosses_the_pipe_z_innermost(tmp_path):
+    reader = _transport_reader(delay=0.0, stream_shape=(2, 2, 3, 4, 5))
+    try:
+        source = ImportSource(path=tmp_path / "x.tif", channel_indices=(1, 0))
+        stacks: list[tuple[int, int]] = []
+        planes = list(reader.read_planes(source, lambda t, c: stacks.append((t, c))))
+        assert [(t, c, z) for t, c, z, _ in planes] == [
+            (t, c, z) for t in range(2) for c in (1, 0) for z in range(3)
+        ]
+        assert stacks == [(0, 1), (0, 0), (1, 1), (1, 0)]
+        for t, c, z, plane in planes:
+            assert plane.shape == (4, 5) and plane.dtype == np.uint16
+            assert int(plane[0, 0]) == 100 * t + 10 * c + z
+    finally:
+        reader.close()
+
+
+def test_cancel_mid_stream_ends_the_iterator(tmp_path):
+    reader = _transport_reader(delay=0.05, stream_shape=(1, 1, 50, 4, 5))
+    try:
+        seen = []
+        source = ImportSource(path=tmp_path / "x.tif")
+        for item in reader.read_planes(source, is_cancelled=lambda: len(seen) >= 2):
+            seen.append(item)
+        assert 2 <= len(seen) < 50
+        assert not reader.is_running
+    finally:
+        reader.close()
+
+
 # ---------------------------------------------------------------------------
 # JVM
 # ---------------------------------------------------------------------------
@@ -231,6 +278,18 @@ def test_fake_format_projections_match_numpy_over_the_same_planes(jvm_available,
     # the planes differ across z (Bio-Formats stamps the indices), so max is not trivial
     stack = np.stack([jvm_available.read_plane(path, 0, z, 0, 0) for z in range(5)])
     assert not np.array_equal(stack[0], stack[-1])
+
+
+def test_fake_format_stream_matches_read_plane(jvm_available, tmp_path):
+    name = "stream&pixelType=uint16&sizeZ=4&sizeC=2&sizeT=2&sizeX=16&sizeY=12.fake"
+    path = _fake_file(tmp_path, name)
+    (probe,) = jvm_available.probe([path])
+    planes = list(jvm_available.read_planes(_source(probe)))
+    assert [(t, c, z) for t, c, z, _ in planes] == [
+        (t, c, z) for t in range(2) for c in range(2) for z in range(4)
+    ]
+    for t, c, z, plane in planes:
+        np.testing.assert_array_equal(plane, jvm_available.read_plane(path, 0, z, c, t))
 
 
 def test_imagej_hyperstack_values_calibration_and_axis_swap(jvm_available, tmp_path):

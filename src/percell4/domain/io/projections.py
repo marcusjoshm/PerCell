@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 from percell4.domain.errors import ProjectionRequiredError
 
@@ -107,3 +108,62 @@ def uncompressed_nbytes(shape: Iterable[int], itemsize: int) -> int:
     size shown to the user goes through this.
     """
     return math.prod(int(x) for x in shape) * int(itemsize)
+
+
+#: The token that stands for the full z-series in a keep list
+#: (``--keep max,zseries``) and in labels.
+ZSERIES_TOKEN = "zseries"
+
+
+@dataclass(frozen=True)
+class StorageChoice:
+    """What an import keeps from a z-stack: projections and/or the z-series.
+
+    ``projections`` holds product names in display order. At least one
+    projection or the z-series must be kept. A choice with no projection
+    makes a view-only dataset until a projection is added.
+    """
+
+    projections: tuple[str, ...] = (PREFERRED_PROJECTION,)
+    keep_zseries: bool = False
+
+    def __post_init__(self) -> None:
+        unknown = [n for n in self.projections if n not in PROJECTION_NAMES]
+        if unknown:
+            raise ValueError(
+                f"unknown projection(s) {unknown}, expected some of {PROJECTION_NAMES}"
+            )
+        object.__setattr__(self, "projections", ordered_projections(self.projections))
+        if not self.projections and not self.keep_zseries:
+            raise ValueError("keep at least one projection or the z-series")
+
+    @classmethod
+    def from_z_method(cls, z_method: str) -> StorageChoice:
+        """The choice an import made before storage choices existed: one
+        projection by ``z_method``, no z-series."""
+        return cls(projections=(projection_for_method(z_method),))
+
+    @classmethod
+    def parse(cls, text: str) -> StorageChoice:
+        """Parse a keep list such as ``"max,mean,zseries"``."""
+        tokens = [t.strip().lower() for t in text.split(",") if t.strip()]
+        allowed = (*PROJECTION_NAMES, ZSERIES_TOKEN)
+        unknown = [t for t in tokens if t not in allowed]
+        if unknown:
+            raise ValueError(f"unknown keep value(s) {unknown}, expected some of {allowed}")
+        return cls(
+            projections=tuple(t for t in tokens if t != ZSERIES_TOKEN),
+            keep_zseries=ZSERIES_TOKEN in tokens,
+        )
+
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        """The keep list, e.g. ``("max", "mean", "zseries")``."""
+        return self.projections + ((ZSERIES_TOKEN,) if self.keep_zseries else ())
+
+    @property
+    def label(self) -> str:
+        """Display text, e.g. ``"max, mean, z-series"``."""
+        return ", ".join(
+            "z-series" if t == ZSERIES_TOKEN else t for t in self.tokens
+        )
