@@ -1111,6 +1111,10 @@ class LauncherWindow(QMainWindow):
         config = dialog.compress_config
         dialog.deleteLater()
 
+        if config.infile_scheme is not None:
+            self._run_infile_import(config)
+            return
+
         checked = [
             ds
             for ds in config.datasets
@@ -1226,6 +1230,130 @@ class LauncherWindow(QMainWindow):
                 self,
                 "Compression Errors",
                 f"Failed datasets:\n\n{error_text}",
+                icon=QMessageBox.Warning,
+            )
+
+    def _run_infile_import(self, config, reader=None) -> None:
+        """Import each reviewed in-file source, with per-plane progress and cancel.
+
+        Each output is written to a temp file and moved into place only when
+        complete, so a cancel or failure leaves no partial dataset. An
+        existing output is replaced as a whole; the pre-flight names the
+        segmentations and masks that would be lost.
+        """
+        from qtpy.QtWidgets import QMessageBox
+
+        from percell4.adapters.importer import import_infile_dataset
+        from percell4.domain.errors import ImportCancelledError
+
+        sources = [s for s in config.infile_scheme.importable_sources if s.channel_indices]
+        if not sources:
+            self.statusBar().showMessage("No files selected to import")
+            return
+        z_method = config.infile_scheme.z_method
+
+        def target_for(src):
+            folder = config.output_dir or src.path.parent
+            return Path(folder) / f"{src.output_name}.h5"
+
+        names = [s.output_name for s in sources]
+        clashes = sorted({n for n in names if names.count(n) > 1})
+        if clashes:
+            message_box(
+                self,
+                "Duplicate Names",
+                "More than one file would be written as:\n"
+                + "\n".join(f"• {n}.h5" for n in clashes)
+                + "\n\nLeave out all but one of each in the review table.",
+                icon=QMessageBox.Warning,
+            )
+            return
+
+        existing = [s for s in sources if target_for(s).exists()]
+        if existing:
+            lines = []
+            for src in existing[:5]:
+                layers = _derived_layer_names(target_for(src))
+                lost = f" (loses {', '.join(layers)})" if layers else ""
+                lines.append(f"• {src.output_name}.h5{lost}")
+            if len(existing) > 5:
+                lines.append(f"(+{len(existing) - 5} more)")
+            reply = message_box(
+                self,
+                "Files Exist",
+                f"{len(existing)} output file(s) already exist:\n" + "\n".join(lines)
+                + "\n\nReplace them? A replaced file loses its segmentations and masks.",
+                icon=QMessageBox.Question,
+                buttons=QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.No:
+                sources = [s for s in sources if not target_for(s).exists()]
+                if not sources:
+                    self.statusBar().showMessage("No datasets to import")
+                    return
+
+        if reader is None:
+            from percell4.adapters.infile_scan import shared_reader
+
+            reader = shared_reader()
+
+        def planes(src) -> int:
+            eff = src.effective
+            return max(1, eff.size_t if eff is not None else 1) * len(src.channel_indices)
+
+        total = sum(planes(s) for s in sources)
+        # Must stay modal: the read loop polls wasCanceled() and relies on
+        # setValue()'s modal event pump (see blocking_progress_modality).
+        progress = progress_dialog(
+            self, "Importing...", "Cancel", 0, total, modality=blocking_progress_modality()
+        )
+        progress.setMinimumDuration(0)
+        done = [0]
+
+        def on_plane(_t, _c) -> None:
+            done[0] += 1
+            progress.setValue(done[0])
+
+        completed, failed, cancelled = [], [], False
+        for i, src in enumerate(sources):
+            if progress.wasCanceled():
+                cancelled = True
+                break
+            progress.setLabelText(f"({i + 1}/{len(sources)}) {src.output_name}")
+            try:
+                import_infile_dataset(
+                    src,
+                    target_for(src),
+                    reader,
+                    z_method=z_method,
+                    creation_bin=config.creation_bin,
+                    on_plane=on_plane,
+                    is_cancelled=progress.wasCanceled,
+                )
+                completed.append(src.output_name)
+            except ImportCancelledError:
+                cancelled = True
+                break
+            except Exception as e:  # noqa: BLE001 - reported per dataset, batch continues
+                failed.append((src.output_name, str(e)))
+        progress.setValue(total)
+        progress.close()
+
+        parts = []
+        if completed:
+            parts.append(f"{len(completed)} imported")
+        if failed:
+            parts.append(f"{len(failed)} failed")
+        if cancelled:
+            parts.append("cancelled")
+        self.statusBar().showMessage(f"In-file import: {', '.join(parts) or 'nothing done'}")
+        if failed:
+            message_box(
+                self,
+                "Import Errors",
+                "Failed datasets:\n\n" + "\n".join(f"• {n}: {e}" for n, e in failed),
                 icon=QMessageBox.Warning,
             )
 
@@ -2218,3 +2346,14 @@ class LauncherWindow(QMainWindow):
         geom = app_settings().value("launcher/geometry")
         if geom:
             self.restoreGeometry(geom)
+
+
+def _derived_layer_names(h5_path) -> list[str]:
+    """Segmentation and mask names stored in an existing dataset, for a warning."""
+    try:
+        from percell4.store import DatasetStore
+
+        store = DatasetStore(h5_path)
+        return [*store.list_labels(), *store.list_masks()]
+    except Exception:  # noqa: BLE001 - an unreadable file just shows no list
+        return []

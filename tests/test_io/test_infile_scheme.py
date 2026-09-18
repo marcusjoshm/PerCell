@@ -451,3 +451,22 @@ def test_module_imports_nothing_forbidden() -> None:
             names.append(node.module)
     forbidden = ("percell4.adapters", "qtpy", "PyQt5", "h5py", "jpype", "tifffile")
     assert not [n for n in names if n.startswith(forbidden)]
+
+
+def test_with_z_method_adds_and_removes_the_sum_warning():
+    from percell4.domain.io.infile import with_z_method
+
+    probes = [
+        FileProbe(path=Path(f"/d/{i}.tif"), series=(SeriesProbe(index=0, size_c=2, size_z=z,
+                                                               physical_z_um=0.5),),
+                  used_files=(Path(f"/d/{i}.tif"),))
+        for i, z in enumerate((5, 7))
+    ]
+    scheme = suggest_scheme(probes, "mip")
+    assert not any("summed" in w for w in scheme.warnings)
+    summed = with_z_method(scheme, "sum")
+    assert summed.z_method == "sum"
+    assert sum("summed" in w for w in summed.warnings) == 1
+    assert sum("z-count varies" in w for w in summed.warnings) == 1
+    back = with_z_method(summed, "mean")
+    assert not any("summed" in w for w in back.warnings)

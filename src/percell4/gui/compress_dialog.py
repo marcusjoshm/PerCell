@@ -32,25 +32,70 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from percell4.domain.io.infile import ImportScheme, StageOneResult
 from percell4.domain.io.models import (
     CompressConfig,
     DatasetGuiState,
     DatasetSpec,
+    DiscoveryMode,
     LayerAssignment,
     LayerType,
     TokenConfig,
 )
 from percell4.domain.io.naming import channel_display_name
 from percell4.gui._dialog_utils import (
+    blocking_progress_modality,
     cap_to_screen,
     center_on_screen,
     detach_window,
+    open_file_names,
+    progress_dialog,
     wrap_in_scroll,
 )
 from percell4.gui._stitching_form import StitchingForm
+from percell4.gui.infile_review import InfileReviewTable
 
 # Index of the "Tokenless (by name)" entry in the Discovery combo.
 _TOKENLESS_INDEX = 2
+# Index of the "In-file (multi-dimensional)" entry in the Discovery combo.
+_INFILE_INDEX = 3
+_MODE_INDEX = {
+    DiscoveryMode.SUBDIRECTORY: 0,
+    DiscoveryMode.FLAT: 1,
+    DiscoveryMode.TOKENLESS: _TOKENLESS_INDEX,
+    DiscoveryMode.INFILE: _INFILE_INDEX,
+}
+_MODE_LABELS = {
+    DiscoveryMode.SUBDIRECTORY: "Subdirectory",
+    DiscoveryMode.FLAT: "Flat Directory",
+    DiscoveryMode.TOKENLESS: "Tokenless",
+    DiscoveryMode.INFILE: "In-file",
+}
+_IMAGE_FILTER = (
+    "Microscopy images (*.tif *.tiff *.btf *.czi *.nd2 *.lif *.lsm *.oib *.oif "
+    "*.ims *.vsi *.dv *.r3d *.ics *.stk *.lei *.zvi *.png *.jpg);;All files (*)"
+)
+
+
+def _java_ready() -> bool:
+    from percell4.adapters.java_runtime import describe_java_environment
+
+    return describe_java_environment().ready
+
+
+def _run_java_setup(parent) -> bool:
+    from percell4.gui.java_setup_dialog import JavaSetupDialog
+
+    dialog = JavaSetupDialog(parent)
+    accepted = dialog.exec_() == QDialog.Accepted
+    dialog.deleteLater()
+    return accepted
+
+
+def _shared_reader():
+    from percell4.adapters.infile_scan import shared_reader
+
+    return shared_reader()
 
 
 class CompressDialog(QDialog):
@@ -88,6 +133,17 @@ class CompressDialog(QDialog):
         # regex into import_dataset (discovery <-> importer parity).
         self._tokenless_token_config: TokenConfig | None = None
 
+        # Source selection: one directory, or explicit files. Stage one of the
+        # in-file classifier runs on it to suggest a discovery mode.
+        self._selection: list[Path] = []
+        self._stage_one: StageOneResult | None = None
+        # Multi-plane files dropped from the last legacy discovery (R14).
+        self._legacy_excluded: list[Path] = []
+        # Seams for tests: the in-file reader, and the Java readiness gate.
+        self._reader_factory = _shared_reader
+        self._java_ready = _java_ready
+        self._java_setup = _run_java_setup
+
         # Manual mode state: per-channel config (shared across datasets)
         self._channel_configs: dict[str, _ChannelConfig] = {}
 
@@ -109,16 +165,21 @@ class CompressDialog(QDialog):
         src_layout = QVBoxLayout(src_group)
 
         row_src = QHBoxLayout()
-        row_src.addWidget(QLabel("Directory:"))
+        row_src.addWidget(QLabel("Source:"))
         self._source_edit = QLineEdit()
         self._source_edit.setPlaceholderText(
-            "Select a folder containing TIFFs..."
+            "Select a folder, or one or more image files..."
         )
         self._source_edit.setReadOnly(True)
         row_src.addWidget(self._source_edit, 1)
         btn_browse_src = QPushButton("Browse...")
+        btn_browse_src.setToolTip("Select a folder")
         btn_browse_src.clicked.connect(self._on_browse_source)
         row_src.addWidget(btn_browse_src)
+        btn_browse_files = QPushButton("Files...")
+        btn_browse_files.setToolTip("Select one or more image files")
+        btn_browse_files.clicked.connect(self._on_browse_files)
+        row_src.addWidget(btn_browse_files)
         src_layout.addLayout(row_src)
 
         row_out = QHBoxLayout()
@@ -140,7 +201,12 @@ class CompressDialog(QDialog):
         options_row.addWidget(QLabel("Discovery:"))
         self._discovery_combo = QComboBox()
         self._discovery_combo.addItems(
-            ["Subdirectory", "Flat Directory", "Tokenless (by name)"]
+            [
+                "Subdirectory",
+                "Flat Directory",
+                "Tokenless (by name)",
+                "In-file (multi-dimensional)",
+            ]
         )
         self._discovery_combo.setToolTip(
             "Subdirectory: each child folder = one dataset.\n"
@@ -149,7 +215,9 @@ class CompressDialog(QDialog):
             "Tokenless (by name): no chXX token needed — the shared leading\n"
             "prefix becomes the .h5 name and the trailing name becomes the\n"
             "channel (e.g. ..._DNA, ..._SG_mask). Use Manual mode to rename\n"
-            "a mis-derived channel or assign it as mask / segmentation."
+            "a mis-derived channel or assign it as mask / segmentation.\n"
+            "In-file: each file holds its own channels, z and time (ImageJ\n"
+            "hyperstacks, OME-TIFF, vendor formats), read with Bio-Formats."
         )
         self._discovery_combo.currentIndexChanged.connect(
             self._on_discovery_mode_changed
@@ -166,12 +234,19 @@ class CompressDialog(QDialog):
         options_row.addWidget(self._manual_radio)
         options_row.addStretch()
         layout.addLayout(options_row)
+        self._legacy_mode_widgets = [self._auto_radio, self._manual_radio]
+
+        # Why the discovery mode was chosen for the current selection.
+        self._suggestion_label = QLabel("")
+        self._suggestion_label.setWordWrap(True)
+        layout.addWidget(self._suggestion_label)
 
         # ── Datasets + Channels (side by side) ──
         lists_row = QHBoxLayout()
 
         # Left: datasets
         ds_group = QGroupBox("Datasets")
+        self._ds_group = ds_group
         ds_layout = QVBoxLayout(ds_group)
 
         ds_btn_row = QHBoxLayout()
@@ -231,6 +306,15 @@ class CompressDialog(QDialog):
 
         layout.addLayout(lists_row)
 
+        # ── In-file review (shown only in In-file mode) ──
+        self._infile_group = QGroupBox("Files to import")
+        infile_layout = QVBoxLayout(self._infile_group)
+        self._review = InfileReviewTable()
+        self._review.changed.connect(self._update_compress_button)
+        infile_layout.addWidget(self._review)
+        self._infile_group.setVisible(False)
+        layout.addWidget(self._infile_group)
+
         # ── Discovery summary ──
         self._summary_label = QLabel("")
         self._summary_label.setWordWrap(True)
@@ -243,7 +327,9 @@ class CompressDialog(QDialog):
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("Z-Projection:"))
         self._z_combo = QComboBox()
-        self._z_combo.addItems(["mip", "mean", "sum", "none"])
+        # No "none": the store has no Z axis, so every import projects Z.
+        self._z_combo.addItems(["mip", "mean", "sum"])
+        self._z_combo.currentTextChanged.connect(self._on_z_method_changed)
         row1.addWidget(self._z_combo)
         row1.addStretch()
         settings_layout.addLayout(row1)
@@ -273,6 +359,7 @@ class CompressDialog(QDialog):
         self._stitch_fusion = self._stitch_widget.fusion
         self._stitch_widget.setVisible(False)
         settings_layout.addWidget(self._stitch_widget)
+        self._legacy_mode_widgets.append(self._stitch_check)
 
         # Creation spatial bin -- locks the dataset's native_shape at
         # compress time. Cannot change after.
@@ -502,6 +589,14 @@ class CompressDialog(QDialog):
                 for ds in datasets
             ]
 
+        infile_scheme: ImportScheme | None = None
+        if self._is_infile_mode():
+            from percell4.domain.io.infile import with_z_method
+
+            infile_scheme = with_z_method(self._review.scheme(), self._z_combo.currentText())
+            datasets = []
+            gui_states = {}
+
         return CompressConfig(
             z_project_method=self._z_combo.currentText(),
             token_config=self._current_token_config(),
@@ -514,6 +609,7 @@ class CompressDialog(QDialog):
             dataset_name_overrides=dataset_name_overrides,
             flim_params=flim_params,
             creation_bin=int(self._creation_bin_spin.value()),
+            infile_scheme=infile_scheme,
         )
 
     # ------------------------------------------------------------------
@@ -530,7 +626,74 @@ class CompressDialog(QDialog):
         self._source_edit.setText(path)
         if not self._output_edit.text().strip():
             self._output_edit.setText(str(Path(path).parent))
+        self._set_selection([Path(path)])
+
+    def _on_browse_files(self) -> None:
+        paths, _ = open_file_names(
+            self, "Select Image Files", self._project_dir or "", _IMAGE_FILTER
+        )
+        if not paths:
+            return
+        files = [Path(p) for p in paths]
+        parent = files[0].parent
+        self._source_edit.setText(
+            str(files[0]) if len(files) == 1 else f"{len(files)} files in {parent}"
+        )
+        if not self._output_edit.text().strip():
+            self._output_edit.setText(str(parent))
+        self._set_selection(files)
+
+    def _set_selection(self, paths: list[Path]) -> None:
+        """Adopt a new source selection, suggest a mode, then discover."""
+        from percell4.adapters.infile_scan import expand_selection, tiff_plane_count
+        from percell4.domain.io.infile import preclassify
+
+        self._selection = list(paths)
+        try:
+            self._stage_one = preclassify(expand_selection(paths), tiff_plane_count)
+        except Exception as e:  # noqa: BLE001 - a bad selection is reported, not raised
+            self._stage_one = None
+            self._suggestion_label.setText(f"Could not read the selection: {e}")
+        else:
+            self._apply_suggestion(self._stage_one)
         self._run_discovery()
+
+    def _apply_suggestion(self, stage: StageOneResult) -> None:
+        """Preselect the suggested mode and say why. The combo stays the override.
+
+        Stage one cannot tell a Tokenless folder from a Flat one, so a user
+        who picked Tokenless keeps it when the suggestion is a token mode.
+        A selection with no image files at its top level leaves the mode as
+        it is (a Subdirectory root holds its images in child folders).
+        """
+        suggested = stage.suggested_mode
+        n_multi, n_single = len(stage.candidates), len(stage.legacy)
+        if not n_multi and not n_single:
+            self._suggestion_label.setText("")
+            return
+        keeps_tokenless = (
+            suggested is not DiscoveryMode.INFILE
+            and self._discovery_combo.currentIndex() == _TOKENLESS_INDEX
+        )
+        switch = not keeps_tokenless
+        if switch:
+            self._discovery_combo.blockSignals(True)
+            self._discovery_combo.setCurrentIndex(_MODE_INDEX[suggested])
+            self._discovery_combo.blockSignals(False)
+            self._apply_mode_visibility()
+        if suggested is DiscoveryMode.INFILE:
+            why = f"{n_multi} multi-plane file{'s' if n_multi != 1 else ''}"
+            if n_single:
+                why += f"; {n_single} single-plane file(s) are left out"
+        else:
+            why = f"{n_single} single-plane file{'s' if n_single != 1 else ''}"
+            if n_multi:
+                why += (
+                    f"; {n_multi} multi-plane file(s) are left out"
+                    " (choose In-file to import them)"
+                )
+        mode = _MODE_LABELS[suggested] if switch else "Tokenless (kept)"
+        self._suggestion_label.setText(f"Suggested: {mode} — {why}.")
 
     def _on_browse_output(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -540,11 +703,30 @@ class CompressDialog(QDialog):
             self._output_edit.setText(path)
 
     def _on_discovery_mode_changed(self, index: int) -> None:
-        # Tokenless mode derives the channel regex itself — the free-text token
-        # patterns are irrelevant, so hide that group to avoid confusion.
-        self._token_group.setVisible(index != _TOKENLESS_INDEX)
+        self._apply_mode_visibility()
         if self._source_edit.text().strip():
             self._run_discovery()
+
+    def _is_infile_mode(self) -> bool:
+        return self._discovery_combo.currentIndex() == _INFILE_INDEX
+
+    def _apply_mode_visibility(self) -> None:
+        """Show the review table in In-file mode, the token controls otherwise."""
+        infile = self._is_infile_mode()
+        index = self._discovery_combo.currentIndex()
+        # Tokenless mode derives the channel regex itself — the free-text token
+        # patterns are irrelevant, so hide that group to avoid confusion.
+        self._token_group.setVisible(not infile and index != _TOKENLESS_INDEX)
+        for widget in (self._ds_group, self._ch_group, self._summary_label, self._flim_group,
+                       *self._legacy_mode_widgets):
+            widget.setVisible(not infile)
+        self._stitch_widget.setVisible(not infile and self._stitch_check.isChecked())
+        self._infile_group.setVisible(infile)
+        self._update_compress_button()
+
+    def _on_z_method_changed(self, text: str) -> None:
+        if text:
+            self._review.set_z_method(text)
 
     def _on_mode_changed(self, checked: bool) -> None:
         """Toggle between auto and manual mode."""
@@ -636,11 +818,17 @@ class CompressDialog(QDialog):
         source = self._source_edit.text().strip()
         if not source:
             return
+        if self._is_infile_mode():
+            self._run_infile_discovery()
+            return
 
         self._discovery_generation += 1
         gen = self._discovery_generation
 
-        root = Path(source)
+        # A file selection discovers in the files' folder, then keeps only
+        # the selected files (below). A directory selection is the root.
+        explicit_files = [p for p in self._selection if not p.is_dir()]
+        root = explicit_files[0].parent if explicit_files else Path(source)
         output_dir = None
         if self._output_edit.text().strip():
             output_dir = Path(self._output_edit.text().strip())
@@ -685,9 +873,119 @@ class CompressDialog(QDialog):
         if gen != self._discovery_generation:
             return
 
-        self._datasets = datasets
+        self._datasets = self._filter_legacy_datasets(datasets, explicit_files)
         self._aggregate_tokens()
         self._populate_lists()
+
+    def _filter_legacy_datasets(
+        self, datasets: list[DatasetSpec], explicit_files: list[Path]
+    ) -> list[DatasetSpec]:
+        """Drop multi-plane files (R14) and, for a file selection, unselected files.
+
+        A dataset whose files all survive is returned unchanged, so a
+        single-plane import stays byte-identical.
+        """
+        from percell4.adapters.infile_scan import tiff_plane_count
+
+        keep_only = set(explicit_files) if explicit_files else None
+        excluded: list[Path] = []
+        out: list[DatasetSpec] = []
+        for ds in datasets:
+            files = []
+            for f in ds.files:
+                if keep_only is not None and f.path not in keep_only:
+                    continue
+                if f.path.suffix.lower() in (".tif", ".tiff"):
+                    try:
+                        if tiff_plane_count(f.path) > 1:
+                            excluded.append(f.path)
+                            continue
+                    except Exception:  # noqa: BLE001 - unreadable: keep today's behaviour
+                        pass
+                files.append(f)
+            if len(files) == len(ds.files):
+                out.append(ds)
+            elif files:
+                out.append(replace(ds, files=tuple(files), scan_result=None))
+        self._legacy_excluded = excluded
+        return out
+
+    def _run_infile_discovery(self) -> None:
+        """Probe the selection through Bio-Formats and show the review table."""
+        from percell4.adapters.infile_scan import (
+            expand_selection,
+            scan_selection,
+            tiff_plane_count,
+        )
+        from percell4.domain.errors import BioformatsUnavailableError, JavaUnavailableError
+        from percell4.domain.io.infile import preclassify
+
+        self._discovery_generation += 1
+        gen = self._discovery_generation
+        selection = self._selection or [Path(self._source_edit.text().strip())]
+
+        try:
+            stage = preclassify(
+                expand_selection(selection), tiff_plane_count, DiscoveryMode.INFILE
+            )
+        except Exception as e:  # noqa: BLE001
+            self._review.set_notes([(str(selection[0]), f"could not read: {e}")])
+            self._update_compress_button()
+            return
+        if not stage.candidates:
+            self._review.set_scheme(ImportScheme(excluded=stage.excluded))
+            self._update_compress_button()
+            return
+
+        def notes(reason: str) -> list[tuple[str, str]]:
+            return [(p.name, reason) for p in stage.candidates] + [
+                (e.path.name, e.reason) for e in stage.excluded
+            ]
+
+        if not self._java_ready() and not self._java_setup(self):
+            self._review.set_notes(notes("needs Java"))
+            self._update_compress_button()
+            return
+
+        progress = progress_dialog(
+            self,
+            "Reading file headers...",
+            "Cancel",
+            0,
+            len(stage.candidates),
+            modality=blocking_progress_modality(),
+        )
+        progress.setMinimumDuration(0)
+        seen = [0]
+
+        def on_file(_record) -> None:
+            seen[0] += 1
+            progress.setValue(seen[0])
+
+        try:
+            outcome = scan_selection(
+                selection,
+                reader_factory=self._reader_factory,
+                mode=DiscoveryMode.INFILE,
+                z_method=self._z_combo.currentText(),
+                on_file=on_file,
+                is_cancelled=progress.wasCanceled,
+            )
+        except (JavaUnavailableError, BioformatsUnavailableError) as e:
+            progress.close()
+            self._review.set_notes(notes(f"needs Java: {e}"))
+            self._update_compress_button()
+            return
+        finally:
+            progress.close()
+
+        if gen != self._discovery_generation:
+            return  # a newer selection or mode started meanwhile
+        if outcome.cancelled or outcome.scheme is None:
+            self._review.set_notes(notes("scan cancelled"))
+        else:
+            self._review.set_scheme(outcome.scheme)
+        self._update_compress_button()
 
     def _aggregate_tokens(self) -> None:
         """Collect all unique channels, tiles, z-slices, timepoints."""
@@ -776,6 +1074,12 @@ class CompressDialog(QDialog):
             parts.append(f"Timepoints: {len(tp)} (t{tp[0]}\u2013t{tp[-1]})")
         if not parts:
             parts.append("No tiles, z-slices, or timepoints detected")
+        if self._legacy_excluded:
+            n = len(self._legacy_excluded)
+            parts.append(
+                f"{n} multi-plane file{'s' if n != 1 else ''} left out "
+                "(multi-plane file, import with In-file mode)"
+            )
         self._summary_label.setText("    ".join(parts))
 
         # Auto-enable stitching if tiles detected
@@ -914,6 +1218,9 @@ class CompressDialog(QDialog):
         self._on_flim_group_toggled(self._flim_group.isChecked())
 
     def _update_compress_button(self) -> None:
+        if self._is_infile_mode():
+            self._btn_compress.setEnabled(bool(self._review.importable_sources()))
+            return
         any_ds = any(
             self._ds_list.item(i).checkState() == Qt.Checked
             for i in range(self._ds_list.count())

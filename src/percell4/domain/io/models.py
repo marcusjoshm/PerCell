@@ -6,6 +6,10 @@ import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # infile imports this module; a runtime import would cycle
+    from percell4.domain.io.infile import ImportScheme
 
 _MAX_PATTERN_LENGTH = 200
 
@@ -317,6 +321,9 @@ class CompressConfig:
     gui_states: dict[str, DatasetGuiState] = field(default_factory=dict)
     flim_params: dict | None = None  # passed through to import_dataset for .bin FLIM data
     creation_bin: int = 1  # sum-binned k×k at compress; defines /metadata.native_shape
+    # In-file mode: the reviewed scheme. None for the token and tokenless modes,
+    # which import ``datasets`` through import_dataset instead.
+    infile_scheme: ImportScheme | None = None
 
 
 @dataclass(frozen=True)

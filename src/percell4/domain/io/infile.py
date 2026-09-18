@@ -471,6 +471,38 @@ def _join_reasons(*reasons: str) -> str:
     return "; ".join(r for r in reasons if r)
 
 
+def z_warnings(sources: Iterable[ImportSource], z_method: str) -> tuple[str, ...]:
+    """The R7 notes for z-counts that vary across ``sources``.
+
+    Recomputed whenever the z method changes, so a switch to ``sum`` warns
+    even after the scheme was suggested.
+    """
+    z_counts = {s.series.size_z for s in sources if s.series is not None}
+    if len(z_counts) <= 1:
+        return ()
+    notes = [
+        f"z-count varies across files ({min(z_counts)} to {max(z_counts)}); "
+        "each file is projected over its own z-series"
+    ]
+    if z_method == "sum":
+        notes.append(
+            "summed intensities are not comparable across datasets: they scale "
+            "with z-count. Use max or mean instead"
+        )
+    return tuple(notes)
+
+
+def with_z_method(scheme: ImportScheme, z_method: str) -> ImportScheme:
+    """``scheme`` with a new z method and its z-count notes recomputed."""
+    if z_method not in Z_METHODS:
+        raise ValueError(f"unknown z method {z_method!r}, expected one of {Z_METHODS}")
+    old = set(z_warnings(scheme.sources, scheme.z_method))
+    kept = tuple(w for w in scheme.warnings if w not in old)
+    return replace(
+        scheme, z_method=z_method, warnings=kept + z_warnings(scheme.sources, z_method)
+    )
+
+
 def suggest_scheme(probes: Iterable[FileProbe], z_method: str = "mip") -> ImportScheme:
     """Turn reader probes into a suggested :class:`ImportScheme`.
 
@@ -527,18 +559,7 @@ def suggest_scheme(probes: Iterable[FileProbe], z_method: str = "mip") -> Import
             )
             warnings.append(f"{src.output_name}: {reason}, excluded until confirmed")
 
-    # Z-count differences (R7).
-    z_counts = {s.series.size_z for s in sources if s.series is not None}
-    if len(z_counts) > 1:
-        warnings.append(
-            f"z-count varies across files ({min(z_counts)} to {max(z_counts)}); "
-            "each file is projected over its own z-series"
-        )
-        if z_method == "sum":
-            warnings.append(
-                "summed intensities are not comparable across datasets: they scale "
-                "with z-count. Use max or mean instead"
-            )
+    warnings.extend(z_warnings(sources, z_method))
 
     # Output-name collisions across the whole scheme.
     names = Counter(s.output_name for s in sources)

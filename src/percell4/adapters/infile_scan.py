@@ -25,6 +25,23 @@ from percell4.domain.io.models import DiscoveryMode
 from percell4.io.paths import drop_sidecars, scan_files
 from percell4.ports.image_reader import ImageReader, IsCancelled, OnFile
 
+_SHARED_READER: ImageReader | None = None
+
+
+def shared_reader() -> ImageReader:
+    """The process's Bio-Formats reader, created on first use.
+
+    The dialog probes with it and the import loop reads with it, so one JVM
+    child serves the whole session. The reader closes its child at exit.
+    """
+    global _SHARED_READER
+    if _SHARED_READER is None:
+        from percell4.adapters.bioformats_reader import BioformatsReader
+
+        _SHARED_READER = BioformatsReader()
+    return _SHARED_READER
+
+
 #: TIFF axes that belong to one plane rather than counting planes.
 _PLANE_AXES = frozenset("YXS")
 
