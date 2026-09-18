@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from io import StringIO
@@ -23,6 +24,7 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+from percell4.domain.errors import ProjectionRequiredError
 from percell4.domain.io.cross_format import deserialize_rule, serialize_rule
 from percell4.domain.io.layout import (
     intensity_channel_count,
@@ -34,6 +36,12 @@ from percell4.domain.io.models import (
     ExplicitRule,
     ProvenanceRecord,
     StitchProvenanceRecord,
+)
+from percell4.domain.io.projections import (
+    PROJECTION_NAMES,
+    legacy_projection_name,
+    ordered_projections,
+    resolve_projection,
 )
 from percell4.domain.io.view_bin import (
     majority_vote_mask,
@@ -48,6 +56,17 @@ logger = logging.getLogger(__name__)
 # Chunk cache size for session reads (64 MB)
 _READ_CACHE_BYTES = 64 * 1024 * 1024
 
+#: The path every caller reads intensity through. On a dataset with named
+#: projections it resolves to one of them (see ``DatasetStore._resolve``);
+#: on a dataset written before named projections it is the array itself.
+INTENSITY_PATH = "intensity"
+#: Group holding one array per kept projection (``projections/max`` ...).
+PROJECTIONS_GROUP = "projections"
+#: The optional full z-series, (T,) C, Z, H, W float32.
+ZSERIES_PATH = "zseries"
+#: Largest z-series chunk edge; a chunk otherwise holds one whole plane.
+_ZSERIES_CHUNK_EDGE = 2048
+
 
 def _apply_view_bin(hdf5_path: str, arr: NDArray, view_bin: int) -> NDArray:
     """Dispatch view-bin downsampling by HDF5 path prefix.
@@ -60,6 +79,10 @@ def _apply_view_bin(hdf5_path: str, arr: NDArray, view_bin: int) -> NDArray:
     # Normalize the path (drop leading slash for consistent prefix checks).
     p = hdf5_path.lstrip("/")
     if p == "intensity" or p.startswith("intensity/"):
+        return sum_bin_2d(arr, view_bin)
+    if p.startswith(f"{PROJECTIONS_GROUP}/") or p == ZSERIES_PATH:
+        # Named projections and z-series planes are photon-count images,
+        # exactly like the legacy /intensity.
         return sum_bin_2d(arr, view_bin)
     if p.startswith("decay/"):
         return sum_bin_decay(arr, view_bin)
@@ -77,21 +100,54 @@ def _apply_view_bin(hdf5_path: str, arr: NDArray, view_bin: int) -> NDArray:
     return arr
 
 
+def _stored_projection_arrays(f: h5py.File) -> dict[str, str]:
+    """``{projection name: HDF5 path}`` for the intensity arrays in ``f``.
+
+    Named projections win. A file with none but a legacy ``/intensity``
+    reports that one array under its legacy name. Metadata only.
+    """
+    grp = f.get(PROJECTIONS_GROUP)
+    if isinstance(grp, h5py.Group):
+        names = [n for n in grp if isinstance(grp[n], h5py.Dataset)]
+        if names:
+            return {
+                n: f"{PROJECTIONS_GROUP}/{n}" for n in ordered_projections(names)
+            }
+    if INTENSITY_PATH in f and isinstance(f[INTENSITY_PATH], h5py.Dataset):
+        z_projection = (
+            f["metadata"].attrs.get("z_projection") if "metadata" in f else None
+        )
+        return {legacy_projection_name(z_projection): INTENSITY_PATH}
+    return {}
+
+
+def _first_intensity_array(f: h5py.File) -> h5py.Dataset | None:
+    """The legacy ``/intensity``, else the first named projection, else None."""
+    paths = _stored_projection_arrays(f)
+    return f[next(iter(paths.values()))] if paths else None
+
+
 def _infer_bin_metadata(f: h5py.File) -> dict[str, Any]:
     """Return ``{"native_shape": ..., "creation_bin": ...}`` inferred from
     an open HDF5 file's array contents.
 
-    ``native_shape`` is the last two dims of ``/intensity`` if it exists,
-    else the first two dims of the first ``/decay/<ch>`` array, else
-    ``None``. ``creation_bin`` defaults to ``1`` when absent from
+    ``native_shape`` is the last two dims of ``/intensity`` (or, on a dataset
+    with named projections, of the first projection) if it exists, else of
+    the z-series, else the first two dims of the first ``/decay/<ch>`` array,
+    else ``None``. ``creation_bin`` defaults to ``1`` when absent from
     ``/metadata.attrs``.
 
     Pure read of the open file handle -- does not mutate or close.
     """
     native_shape: tuple[int, int] | None = None
     n_timepoints = 1
-    if "intensity" in f:
-        ds = f["intensity"]
+    intensity = (
+        f["intensity"] if "intensity" in f else _first_intensity_array(f)
+    )
+    if intensity is None and isinstance(f.get(ZSERIES_PATH), h5py.Dataset):
+        intensity = f[ZSERIES_PATH]
+    if intensity is not None:
+        ds = intensity
         shape = ds.shape
         if len(shape) >= 2:
             native_shape = (int(shape[-2]), int(shape[-1]))
@@ -126,6 +182,39 @@ def _infer_bin_metadata(f: h5py.File) -> dict[str, Any]:
         "creation_bin": creation_bin,
         "n_timepoints": n_timepoints,
     }
+
+
+def _decode_names(raw: Any) -> tuple[str, ...]:
+    """A string-list attr as a tuple of ``str`` (h5py may give bytes or numpy)."""
+    if isinstance(raw, (str, bytes)):
+        raw = [raw]
+    elif hasattr(raw, "tolist"):
+        raw = raw.tolist()
+    return tuple(n.decode() if isinstance(n, bytes) else str(n) for n in raw)
+
+
+class _ZSeriesWriter:
+    """Fills a pre-allocated z-series one plane at a time (see
+    :meth:`DatasetStore.zseries_writer`)."""
+
+    def __init__(self, ds: h5py.Dataset) -> None:
+        self._ds = ds
+        self.shape = tuple(int(x) for x in ds.shape)
+
+    def write_plane(self, t: int, c: int, z: int, plane: NDArray) -> None:
+        """Write plane ``(t, c, z)``; ``t`` must be 0 without a time axis."""
+        if tuple(plane.shape) != self.shape[-2:]:
+            raise ValueError(
+                f"plane shape {tuple(plane.shape)} does not match the z-series "
+                f"plane {self.shape[-2:]}"
+            )
+        plane = np.asarray(plane, dtype=np.float32)
+        if len(self.shape) == 5:
+            self._ds[t, c, z] = plane
+        elif t != 0:
+            raise IndexError(f"timepoint={t} out of range: the z-series has no T axis")
+        else:
+            self._ds[c, z] = plane
 
 
 # Provenance-attribute keys for masks captured by "Apply Current Phasor
@@ -326,9 +415,75 @@ class DatasetStore:
     for efficient repeated access with a large chunk cache.
     """
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, projection: str | None = None) -> None:
         self.path = Path(path)
+        #: The projection every read of ``intensity`` answers from; ``None``
+        #: means the preferred projection, else the sole one (see
+        #: :func:`~percell4.domain.io.projections.resolve_projection`). Fixed
+        #: for the store's life: open a new store to read another projection.
+        self.projection = projection
         self._session_file: h5py.File | None = None
+
+    # ── Projection resolution ─────────────────────────────────
+
+    def _resolve(self, f: h5py.File, hdf5_path: str) -> str:
+        """Map a read of ``intensity`` to the array it answers from.
+
+        Every other path passes through unchanged. A dataset with no
+        projection and no z-series keeps ``intensity``, so a read raises
+        today's ``KeyError``. Raises :class:`ProjectionRequiredError` when
+        the projection cannot be chosen, including a z-series-only dataset.
+        """
+        if hdf5_path.lstrip("/") != INTENSITY_PATH:
+            return hdf5_path
+        paths = _stored_projection_arrays(f)
+        if not paths and ZSERIES_PATH not in f:
+            return INTENSITY_PATH
+        return paths[resolve_projection(tuple(paths), self.projection)]
+
+    def _resolve_soft(self, f: h5py.File, hdf5_path: str) -> str | None:
+        """:meth:`_resolve` for existence and dims checks, which never raise.
+
+        ``None`` when no stored array can answer (no projection, or the
+        chosen one is absent). When several projections are stored and none
+        is chosen, the first answers: every projection shares shape and dims.
+        """
+        try:
+            return self._resolve(f, hdf5_path)
+        except ProjectionRequiredError:
+            paths = _stored_projection_arrays(f)
+            if self.projection is None and paths:
+                return next(iter(paths.values()))
+            return None
+
+    def list_projections(self) -> tuple[str, ...]:
+        """Names of the stored projections, in display order. Metadata only.
+
+        A dataset written before named projections lists its one
+        ``/intensity`` under its legacy name (``max`` for a ``mip`` import,
+        ``projection`` when no method was recorded).
+        """
+        if not self.path.exists():
+            return ()
+        f = self._open_read()
+        try:
+            return tuple(_stored_projection_arrays(f))
+        finally:
+            self._close_if_not_session(f)
+
+    def resolved_intensity_path(self) -> str:
+        """The HDF5 path this store's intensity reads come from.
+
+        For readers that open the file themselves (the parallel viewer
+        decoder, batch image export, FLIM-FRET discovery), so they read the
+        same array the store would. Raises :class:`ProjectionRequiredError`
+        like any intensity read.
+        """
+        f = self._open_read()
+        try:
+            return self._resolve(f, INTENSITY_PATH)
+        finally:
+            self._close_if_not_session(f)
 
     # ── Session mode for reads ────────────────────────────────
 
@@ -376,22 +531,48 @@ class DatasetStore:
         """Write a numpy array to the specified HDF5 path.
 
         Returns the number of elements written.
+
+        Raises ``ValueError`` for ``intensity`` on a dataset with named
+        projections or a z-series: one array cannot stand for every
+        projection. Use :meth:`write_projection` or
+        :meth:`rewrite_projections` there.
         """
         with h5py.File(self.path, "a") as f:
-            if hdf5_path in f:
-                del f[hdf5_path]
-            chunks = _choose_chunks(array.shape, is_decay=is_decay)
-            f.create_dataset(
-                hdf5_path,
-                data=array,
-                chunks=chunks,
-                **_compression_kwargs(is_decay=is_decay),
-            )
-            # Store dimension names if provided in attrs
-            if attrs:
-                for key, val in attrs.items():
-                    f[hdf5_path].attrs[key] = val
+            self._refuse_legacy_intensity_write(f, hdf5_path)
+            self._write_dataset(f, hdf5_path, array, attrs, is_decay)
         return array.size
+
+    @staticmethod
+    def _refuse_legacy_intensity_write(f: h5py.File, hdf5_path: str) -> None:
+        if hdf5_path.lstrip("/") != INTENSITY_PATH:
+            return
+        if PROJECTIONS_GROUP in f or ZSERIES_PATH in f:
+            raise ValueError(
+                "This dataset stores named projections; write intensity with "
+                "write_projection or rewrite_projections, not /intensity."
+            )
+
+    @staticmethod
+    def _write_dataset(
+        f: h5py.File,
+        hdf5_path: str,
+        array: NDArray,
+        attrs: dict[str, Any] | None = None,
+        is_decay: bool = False,
+    ) -> None:
+        if hdf5_path in f:
+            del f[hdf5_path]
+        chunks = _choose_chunks(array.shape, is_decay=is_decay)
+        f.create_dataset(
+            hdf5_path,
+            data=array,
+            chunks=chunks,
+            **_compression_kwargs(is_decay=is_decay),
+        )
+        # Store dimension names if provided in attrs
+        if attrs:
+            for key, val in attrs.items():
+                f[hdf5_path].attrs[key] = val
 
     def read_array(self, hdf5_path: str, view_bin: int = 1) -> NDArray:
         """Read a numpy array from the specified HDF5 path.
@@ -415,11 +596,15 @@ class DatasetStore:
         See ``src/percell4/domain/io/view_bin.py`` for the full per-rule
         contract. The on-disk array is unchanged -- this is a read-time
         view only.
+
+        ``intensity`` reads the store's projection (see :meth:`_resolve`);
+        its view-bin rule is the same whichever array answers.
         """
         if view_bin < 1:
             raise ValueError(f"view_bin must be >= 1, got {view_bin}")
         f = self._open_read()
         try:
+            hdf5_path = self._resolve(f, hdf5_path)
             if hdf5_path not in f:
                 raise KeyError(f"Dataset not found: {hdf5_path}")
             obj = f[hdf5_path]
@@ -646,6 +831,7 @@ class DatasetStore:
             raise ValueError(f"view_bin must be >= 1, got {view_bin}")
         f = self._open_read()
         try:
+            hdf5_path = self._resolve(f, hdf5_path)
             if hdf5_path not in f:
                 raise KeyError(f"Dataset not found: {hdf5_path}")
             ds = f[hdf5_path]
@@ -717,6 +903,7 @@ class DatasetStore:
             raise ValueError(f"view_bin must be >= 1, got {view_bin}")
         f = self._open_read()
         try:
+            hdf5_path = self._resolve(f, hdf5_path)
             if hdf5_path not in f:
                 raise KeyError(f"Dataset not found: {hdf5_path}")
             obj = f[hdf5_path]
@@ -753,6 +940,7 @@ class DatasetStore:
         """
         f = self._open_read()
         try:
+            hdf5_path = self._resolve(f, hdf5_path)
             if hdf5_path not in f:
                 raise KeyError(f"Dataset not found: {hdf5_path}")
             obj = f[hdf5_path]
@@ -766,10 +954,18 @@ class DatasetStore:
         """True when ``hdf5_path`` is a dataset in the file. Metadata only —
         **never decompresses**. Use for existence/enablement checks instead of
         ``try: read_array(...) except`` (which decodes the whole stack).
+
+        For ``intensity``, False when no stored projection can answer: a
+        z-series-only dataset, or a chosen projection it does not hold.
         """
         f = self._open_read()
         try:
-            return hdf5_path in f and isinstance(f[hdf5_path], h5py.Dataset)
+            resolved = self._resolve_soft(f, hdf5_path)
+            return (
+                resolved is not None
+                and resolved in f
+                and isinstance(f[resolved], h5py.Dataset)
+            )
         finally:
             self._close_if_not_session(f)
 
@@ -784,7 +980,12 @@ class DatasetStore:
         """
         f = self._open_read()
         try:
-            if hdf5_path in f and isinstance(f[hdf5_path], h5py.Dataset):
+            hdf5_path = self._resolve_soft(f, hdf5_path)
+            if (
+                hdf5_path is not None
+                and hdf5_path in f
+                and isinstance(f[hdf5_path], h5py.Dataset)
+            ):
                 return dict(f[hdf5_path].attrs)
             return {}
         finally:
@@ -799,6 +1000,7 @@ class DatasetStore:
         """
         f = self._open_read()
         try:
+            hdf5_path = self._resolve(f, hdf5_path)
             if hdf5_path not in f:
                 raise KeyError(f"Dataset not found: {hdf5_path}")
             obj = f[hdf5_path]
@@ -817,6 +1019,7 @@ class DatasetStore:
         """
         f = self._open_read()
         try:
+            hdf5_path = self._resolve(f, hdf5_path)
             if hdf5_path not in f:
                 raise KeyError(f"Dataset not found: {hdf5_path}")
             obj = f[hdf5_path]
@@ -876,7 +1079,8 @@ class DatasetStore:
         """
         f = self._open_read()
         try:
-            if hdf5_path not in f:
+            hdf5_path = self._resolve_soft(f, hdf5_path)
+            if hdf5_path is None or hdf5_path not in f:
                 return False
             obj = f[hdf5_path]
             if not isinstance(obj, h5py.Dataset):
@@ -887,7 +1091,7 @@ class DatasetStore:
             self._close_if_not_session(f)
 
     def check_intensity_dims_consistency(self) -> None:
-        """Raise :class:`DimsConsistencyError` when /intensity's dims are corrupt.
+        """Raise :class:`DimsConsistencyError` when an intensity array's dims are corrupt.
 
         Detects the Add-Layer corruption signature at dataset-open time: a 3D
         ``/intensity`` stamped ``dims=['C','H','W']`` whose leading-axis size
@@ -897,22 +1101,24 @@ class DatasetStore:
         time-aware feature to frame 0. Also flags a ``dims`` attr whose length
         doesn't match the array rank.
 
-        No-op when ``/intensity`` is absent, has no ``dims`` attr, or is
+        Checks the legacy ``/intensity`` or every named projection. No-op when
+        there is none, when an array has no ``dims`` attr, or when all are
         consistent. Reads only attributes + shape (no array data).
         """
         f = self._open_read()
         try:
-            if "intensity" not in f:
-                return
-            ds = f["intensity"]
-            if not isinstance(ds, h5py.Dataset):
-                return
-            raw_dims = ds.attrs.get("dims")
-            if raw_dims is None:
-                return
-            dims = [str(d) for d in raw_dims]
-            ndim = int(ds.ndim)
-            shape = tuple(int(x) for x in ds.shape)
+            arrays = []
+            for path in _stored_projection_arrays(f).values():
+                ds = f[path]
+                raw_dims = ds.attrs.get("dims")
+                if raw_dims is None:
+                    continue
+                arrays.append((
+                    path,
+                    [str(d) for d in raw_dims],
+                    int(ds.ndim),
+                    tuple(int(x) for x in ds.shape),
+                ))
             raw_channel_names = (
                 f["metadata"].attrs.get("channel_names")
                 if "metadata" in f
@@ -920,12 +1126,6 @@ class DatasetStore:
             )
         finally:
             self._close_if_not_session(f)
-
-        if len(dims) != ndim:
-            raise DimsConsistencyError(
-                f"/intensity.dims={dims} has {len(dims)} entries but the array "
-                f"is {ndim}D (shape {shape}). The dims attribute is corrupt."
-            )
 
         if raw_channel_names is None:
             n_channels: int | None = None
@@ -937,24 +1137,277 @@ class DatasetStore:
             channel_names = list(raw_channel_names)
             n_channels = len(channel_names)
 
-        # A leading 'C' axis must match the channel count. When it matches
-        # neither (n_channels known and != shape[0]), the leading axis is almost
-        # certainly a mis-stamped time axis.
-        if (
-            ndim >= 3
-            and dims[0] == "C"
-            and n_channels is not None
-            and n_channels > 0
-            and shape[0] != n_channels
-        ):
-            raise DimsConsistencyError(
-                f"/intensity has a leading 'C' axis of size {shape[0]} but the "
-                f"dataset declares {n_channels} channel(s) ({channel_names!r}). "
-                "This looks like a (T,H,W) time-lapse array mis-stamped as "
-                "['C','H','W'] (e.g. by an older Add-Layer write); the dataset "
-                "would silently read as single-timepoint. Re-import or correct "
-                "the /intensity dims attribute."
+        for path, dims, ndim, shape in arrays:
+            if len(dims) != ndim:
+                raise DimsConsistencyError(
+                    f"/{path}.dims={dims} has {len(dims)} entries but the array "
+                    f"is {ndim}D (shape {shape}). The dims attribute is corrupt."
+                )
+
+            # A leading 'C' axis must match the channel count. When it matches
+            # neither (n_channels known and != shape[0]), the leading axis is
+            # almost certainly a mis-stamped time axis.
+            if (
+                ndim >= 3
+                and dims[0] == "C"
+                and n_channels is not None
+                and n_channels > 0
+                and shape[0] != n_channels
+            ):
+                raise DimsConsistencyError(
+                    f"/{path} has a leading 'C' axis of size {shape[0]} but the "
+                    f"dataset declares {n_channels} channel(s) ({channel_names!r}). "
+                    "This looks like a (T,H,W) time-lapse array mis-stamped as "
+                    "['C','H','W'] (e.g. by an older Add-Layer write); the dataset "
+                    "would silently read as single-timepoint. Re-import or correct "
+                    f"the /{path} dims attribute."
+                )
+
+    # ── Named projections and the z-series ────────────────────
+
+    def _check_xy(self, f: h5py.File, hw: tuple[int, int], kind: str) -> None:
+        """Raise :class:`LayerSizeMismatchError` if ``hw`` differs from the
+        XY grid the dataset's intensity arrays or z-series already use."""
+        existing = _first_intensity_array(f)
+        if existing is None and isinstance(f.get(ZSERIES_PATH), h5py.Dataset):
+            existing = f[ZSERIES_PATH]
+        if existing is None:
+            return
+        grid = (int(existing.shape[-2]), int(existing.shape[-1]))
+        if grid != hw:
+            raise LayerSizeMismatchError(
+                f"{kind} is {hw[0]}x{hw[1]} but the dataset's images are "
+                f"{grid[0]}x{grid[1]}."
             )
+
+    def write_projection(
+        self,
+        name: str,
+        array: NDArray,
+        dims: list[str],
+        attrs: dict[str, Any] | None = None,
+    ) -> int:
+        """Write the named projection (``max``, ``mean`` or ``sum``).
+
+        ``array`` has the legacy ``/intensity`` layout: ``(H, W)``,
+        ``(C, H, W)``, ``(T, H, W)`` or ``(T, C, H, W)``, described by
+        ``dims``. Its XY must match the dataset's other images. Returns the
+        number of elements written.
+        """
+        if name not in PROJECTION_NAMES:
+            raise ValueError(
+                f"unknown projection {name!r}, expected one of {PROJECTION_NAMES}"
+            )
+        if len(dims) != array.ndim:
+            raise ValueError(f"dims {dims} do not describe a {array.ndim}D array")
+        with h5py.File(self.path, "a") as f:
+            path = f"{PROJECTIONS_GROUP}/{name}"
+            if path in f:
+                del f[path]
+            self._check_xy(f, (int(array.shape[-2]), int(array.shape[-1])),
+                           f"The {name} projection")
+            self._write_dataset(f, path, array, {**(attrs or {}), "dims": list(dims)})
+        return array.size
+
+    def rewrite_projections(
+        self, fn: Callable[[NDArray | None], tuple[NDArray, dict[str, Any]] | None]
+    ) -> int:
+        """Apply one channel edit to every intensity array.
+
+        ``fn`` receives an array in the ``/intensity`` layout and returns the
+        new array with its attrs (including ``dims``), or ``None`` to delete
+        it; returning the array it was given (the same object) leaves that
+        array untouched. On a dataset with named projections every projection is
+        rewritten; on an older dataset, ``/intensity``. A dataset with neither
+        gets a new ``/intensity`` from ``fn(None)``, as channel writes did
+        before named projections. A z-series-only dataset raises
+        :class:`ProjectionRequiredError`: add a projection first.
+
+        The z-series is untouched: a channel added here has no Z axis.
+        Returns the number of arrays rewritten.
+        """
+        with h5py.File(self.path, "r") as f:
+            paths = list(_stored_projection_arrays(f).values())
+            if not paths and ZSERIES_PATH in f:
+                resolve_projection((), None)  # raises "add a projection first"
+        if not paths:
+            result = fn(None)
+            if result is not None:
+                array, attrs = result
+                self.write_array(INTENSITY_PATH, array, attrs=attrs)
+            return 1 if result is not None else 0
+        rewritten = 0
+        for path in paths:
+            f = h5py.File(self.path, "r")
+            try:
+                current = f[path][()]
+            finally:
+                f.close()
+            result = fn(current)
+            if result is not None and result[0] is current:
+                continue  # unchanged
+            with h5py.File(self.path, "a") as f:
+                if result is None:
+                    del f[path]
+                    grp = f.get(PROJECTIONS_GROUP)
+                    if isinstance(grp, h5py.Group) and not len(grp):
+                        del f[PROJECTIONS_GROUP]
+                else:
+                    array, attrs = result
+                    self._write_dataset(f, path, array, attrs)
+            rewritten += 1
+        return rewritten
+
+    @contextmanager
+    def zseries_writer(self, shape: tuple[int, ...], channel_names: list[str]):
+        """Pre-allocate the z-series and yield a writer that fills it plane by plane.
+
+        ``shape`` is ``(C, Z, H, W)`` or ``(T, C, Z, H, W)``; ``channel_names``
+        names the ``C`` axis (only channels that had a Z axis). The array is
+        float32 with one plane per chunk, so a plane read decodes one chunk.
+        Any existing z-series is replaced. If the block raises, the partial
+        z-series is removed. The file stays open for the block.
+        """
+        shape = tuple(int(x) for x in shape)
+        if len(shape) not in (4, 5):
+            raise ValueError(f"z-series shape must be (C,Z,H,W) or (T,C,Z,H,W), got {shape}")
+        if len(channel_names) != shape[-4]:
+            raise ValueError(
+                f"{len(channel_names)} channel name(s) for {shape[-4]} z-series channel(s)"
+            )
+        dims = ["T", "C", "Z", "H", "W"][5 - len(shape):]
+        h, w = shape[-2:]
+        chunks = (1,) * (len(shape) - 2) + (
+            min(h, _ZSERIES_CHUNK_EDGE),
+            min(w, _ZSERIES_CHUNK_EDGE),
+        )
+        with h5py.File(self.path, "a") as f:
+            if ZSERIES_PATH in f:
+                del f[ZSERIES_PATH]
+            self._check_xy(f, (h, w), "The z-series")
+            ds = f.create_dataset(
+                ZSERIES_PATH,
+                shape=shape,
+                dtype=np.float32,
+                chunks=chunks,
+                **_compression_kwargs(),
+            )
+            ds.attrs["dims"] = dims
+            ds.attrs["channel_names"] = list(channel_names)
+            try:
+                yield _ZSeriesWriter(ds)
+            except BaseException:
+                del f[ZSERIES_PATH]
+                raise
+
+    def has_zseries(self) -> bool:
+        """True when the dataset stores a z-series. Metadata only."""
+        if not self.path.exists():
+            return False
+        f = self._open_read()
+        try:
+            return isinstance(f.get(ZSERIES_PATH), h5py.Dataset)
+        finally:
+            self._close_if_not_session(f)
+
+    def _zseries_meta(self) -> tuple[tuple[int, ...], tuple[str, ...], tuple[str, ...]]:
+        """``(shape, dims, channel_names)`` of the z-series. Metadata only."""
+        f = self._open_read()
+        try:
+            ds = f.get(ZSERIES_PATH)
+            if not isinstance(ds, h5py.Dataset):
+                raise KeyError(f"Dataset not found: {ZSERIES_PATH}")
+            return (
+                tuple(int(x) for x in ds.shape),
+                tuple(str(d) for d in ds.attrs.get("dims", ())),
+                _decode_names(ds.attrs.get("channel_names", ())),
+            )
+        finally:
+            self._close_if_not_session(f)
+
+    def zseries_shape(self) -> tuple[int, ...]:
+        """The z-series shape, ``(C, Z, H, W)`` or ``(T, C, Z, H, W)``."""
+        return self._zseries_meta()[0]
+
+    def zseries_dims(self) -> tuple[str, ...]:
+        """The z-series ``dims`` attr, e.g. ``("T", "C", "Z", "H", "W")``."""
+        return self._zseries_meta()[1]
+
+    def zseries_channels(self) -> tuple[str, ...]:
+        """Names of the channels the z-series holds, in ``C`` order."""
+        return self._zseries_meta()[2]
+
+    def read_zseries_plane(
+        self, t: int, c: int, z: int, view_bin: int = 1
+    ) -> NDArray:
+        """Read one z-series plane, sum-binned by ``view_bin``.
+
+        ``t`` must be 0 on a z-series without a time axis.
+        """
+        if view_bin < 1:
+            raise ValueError(f"view_bin must be >= 1, got {view_bin}")
+        f = self._open_read()
+        try:
+            ds = f.get(ZSERIES_PATH)
+            if not isinstance(ds, h5py.Dataset):
+                raise KeyError(f"Dataset not found: {ZSERIES_PATH}")
+            if ds.ndim == 5:
+                plane = ds[t, c, z]
+            else:
+                if t != 0:
+                    raise IndexError(f"timepoint={t} out of range: the z-series has no T axis")
+                plane = ds[c, z]
+            return plane if view_bin == 1 else sum_bin_2d(plane, view_bin)
+        finally:
+            self._close_if_not_session(f)
+
+    def delete_zseries_channel(self, name: str) -> bool:
+        """Remove channel ``name`` from the z-series; the z-series goes when it
+        was the last one. True if anything was removed."""
+        if not self.path.exists():
+            return False
+        with h5py.File(self.path, "a") as f:
+            return self._drop_zseries_channel(f, name)
+
+    @staticmethod
+    def _drop_zseries_channel(f: h5py.File, name: str) -> bool:
+        """Remove channel ``name`` from the z-series, plane by plane."""
+        ds = f.get(ZSERIES_PATH)
+        if not isinstance(ds, h5py.Dataset):
+            return False
+        names = list(_decode_names(ds.attrs.get("channel_names", ())))
+        if name not in names:
+            return False
+        if len(names) == 1:
+            del f[ZSERIES_PATH]
+            return True
+        drop = names.index(name)
+        keep = [c for c in range(len(names)) if c != drop]
+        timed = ds.ndim == 5
+        shape = list(ds.shape)
+        shape[-4] = len(keep)
+        tmp_path = f"{ZSERIES_PATH}.tmp"
+        if tmp_path in f:
+            del f[tmp_path]
+        new = f.create_dataset(
+            tmp_path, shape=tuple(shape), dtype=ds.dtype, chunks=ds.chunks,
+            **_compression_kwargs(),
+        )
+        for key, val in ds.attrs.items():
+            new.attrs[key] = val
+        new.attrs["channel_names"] = [names[c] for c in keep]
+        n_t = ds.shape[0] if timed else 1
+        n_z = ds.shape[-3]
+        for t in range(n_t):
+            for out_c, c in enumerate(keep):
+                for z in range(n_z):
+                    if timed:
+                        new[t, out_c, z] = ds[t, c, z]
+                    else:
+                        new[out_c, z] = ds[c, z]
+        del f[ZSERIES_PATH]
+        f.move(tmp_path, ZSERIES_PATH)
+        return True
 
     # ── DataFrame operations ──────────────────────────────────
 
@@ -1582,8 +2035,13 @@ class DatasetStore:
         return self.path.exists()
 
     def delete_item(self, hdf5_path: str) -> bool:
-        """Delete a dataset or group at the given HDF5 path. Returns True if deleted."""
+        """Delete a dataset or group at the given HDF5 path. Returns True if deleted.
+
+        Refuses ``intensity`` on a dataset with named projections, like
+        :meth:`write_array`; use :meth:`rewrite_projections` there.
+        """
         with h5py.File(self.path, "a") as f:
+            self._refuse_legacy_intensity_write(f, hdf5_path)
             if hdf5_path in f:
                 del f[hdf5_path]
                 return True
@@ -1709,6 +2167,8 @@ class DatasetStore:
 
         - ``/decay/<name>`` group (if present)
         - ``/phasor/<name>`` group (if present)
+        - the channel's planes in the z-series (if present; the z-series is
+          removed when this was its only channel)
         - ``name`` entry in ``metadata.channel_names`` (if present)
         - ``flim_cal_phase_<name>`` / ``flim_cal_mod_<name>`` attrs on
           ``/metadata``, plus every per-harmonic variant
@@ -1726,6 +2186,8 @@ class DatasetStore:
                 if p in f:
                     del f[p]
                     deleted_any = True
+            if self._drop_zseries_channel(f, name):
+                deleted_any = True
             if "metadata" in f:
                 attrs = f["metadata"].attrs
                 names = list(attrs.get("channel_names", []))
@@ -1749,10 +2211,11 @@ class DatasetStore:
         """Rename a channel across all per-channel paths and metadata attrs.
 
         Moves ``/decay/<old>`` and ``/phasor/<old>`` groups, updates the
-        ``channel_names`` list, and renames per-channel FLIM calibration
-        attrs (``flim_cal_phase_<name>``, ``flim_cal_mod_<name>``, and every
-        per-harmonic variant ``flim_cal_{phase,mod}_<name>_h<n>``). Surfaces
-        that don't exist are skipped, but at least one must — see below.
+        ``channel_names`` list and the z-series channel names, and renames
+        per-channel FLIM calibration attrs (``flim_cal_phase_<name>``,
+        ``flim_cal_mod_<name>``, and every per-harmonic variant
+        ``flim_cal_{phase,mod}_<name>_h<n>``). Surfaces that don't exist are
+        skipped, but at least one must — see below.
 
         ``old_name`` may also be a **placeholder** for an ``/intensity``
         slice that has no ``channel_names`` entry (``ch<N>``, as synthesized
@@ -1794,8 +2257,16 @@ class DatasetStore:
                 if new_path in f:
                     raise ValueError(f"Target path already exists: {new_path}")
             cal_keys = self._cal_attr_renames(f, old_name, new_name) if has_meta else []
-            if slot is None and not moves and not cal_keys:
+            zseries = f.get(ZSERIES_PATH)
+            z_names = (
+                list(_decode_names(zseries.attrs.get("channel_names", ())))
+                if isinstance(zseries, h5py.Dataset)
+                else []
+            )
+            if slot is None and not moves and not cal_keys and old_name not in z_names:
                 raise ValueError(f"Channel not found: {old_name}")
+            if old_name in z_names and new_name in z_names:
+                raise ValueError(f"Channel already exists: {new_name}")
 
             # ── Apply.
             for old_path, new_path in moves:
@@ -1814,6 +2285,9 @@ class DatasetStore:
                 attrs = f["metadata"].attrs
                 attrs[new_key] = attrs[old_key]
                 del attrs[old_key]
+            if old_name in z_names:
+                z_names[z_names.index(old_name)] = new_name
+                zseries.attrs["channel_names"] = z_names
 
     @staticmethod
     def _unnamed_slice_index(
@@ -1828,9 +2302,10 @@ class DatasetStore:
         promotion.
         """
         idx = placeholder_channel_index(old_name)
-        if idx is None or idx < len(names) or "intensity" not in f:
+        intensity = _first_intensity_array(f)
+        if idx is None or idx < len(names) or intensity is None:
             return None
-        shape = tuple(int(x) for x in f["intensity"].shape)
+        shape = tuple(int(x) for x in intensity.shape)
         n_timepoints = int(f["metadata"].attrs.get("n_timepoints", 1) or 1)
         if idx >= intensity_channel_count(shape, n_timepoints):
             return None

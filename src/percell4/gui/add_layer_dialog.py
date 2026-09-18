@@ -791,17 +791,18 @@ class AddLayerDialog(QDialog):
         notify subscribers of the inventory change."""
         if layer_type == "Channel":
             n_timepoints = int(self._store.metadata.get("n_timepoints", 1) or 1)
-            try:
-                existing = self._store.read_array("intensity")
-            except KeyError:
-                existing = None
+
             # Time-aware concat: on a time-lapse dataset the new channel is
             # coerced to (T,H,W) and concatenated on the C axis -> (T,C,H,W),
-            # never along the time axis (the silent-corruption fix).
-            stacked, dims = build_added_channel_intensity(
-                existing, array, n_timepoints
-            )
-            self._store.write_array("intensity", stacked, attrs={"dims": dims})
+            # never along the time axis (the silent-corruption fix). The
+            # channel has no Z axis, so every projection gets the same image.
+            def _append(existing):
+                stacked, dims = build_added_channel_intensity(
+                    existing, array, n_timepoints
+                )
+                return stacked, {"dims": dims}
+
+            self._store.rewrite_projections(_append)
             meta = self._store.metadata
             names = list(meta.get("channel_names", []))
             names.append(name)
@@ -1695,21 +1696,23 @@ class AddLayerDialog(QDialog):
             )
             return
 
-        # Stack: existing channels followed by the new <ch>_bin channels
+        # Stack: existing channels followed by the new <ch>_bin channels,
+        # in every stored projection.
         new_arrays = list(kept.values())
         new_names = [f"{ch}_bin" for ch in kept.keys()]
-        if existing is None:
-            stacked = np.stack(new_arrays, axis=0).astype(np.float32)
-            all_names = new_names
-        else:
-            stacked = np.concatenate(
-                [existing, np.stack(new_arrays, axis=0)], axis=0
-            ).astype(np.float32)
-            all_names = existing_names + new_names
+        all_names = new_names if existing is None else existing_names + new_names
 
-        self._store.write_array(
-            "intensity", stacked, attrs={"dims": ["C", "H", "W"]}
-        )
+        def _append(current):
+            added = np.stack(new_arrays, axis=0)
+            if current is None:
+                stacked = added.astype(np.float32)
+            else:
+                if current.ndim == 2:
+                    current = current[np.newaxis, :, :]
+                stacked = np.concatenate([current, added], axis=0).astype(np.float32)
+            return stacked, {"dims": ["C", "H", "W"]}
+
+        self._store.rewrite_projections(_append)
         self._store.set_metadata({
             "channel_names": all_names,
             "n_channels": len(all_names),

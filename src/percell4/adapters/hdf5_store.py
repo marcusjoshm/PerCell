@@ -5,6 +5,7 @@ Wraps the existing DatasetStore to conform to the DatasetRepository port.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,8 @@ def _build_handle_metadata(store: DatasetStore) -> dict[str, Any]:
     mask_set = set(mask_names)
     md["segmentation_names"] = [n for n in label_names if n not in mask_set]
     md["mask_names"] = list(mask_names)
+    md["projection_names"] = list(store.list_projections())
+    md["has_zseries"] = store.has_zseries()
     return md
 
 
@@ -39,15 +42,30 @@ class Hdf5DatasetRepository:
     Conforms to percell4.ports.dataset_repository.DatasetRepository.
     Caches DatasetStore instances by path to avoid re-opening HDF5
     file metadata on every call (50-200ms overhead per open).
+
+    Every store it opens reads intensity from ``projection`` (``None``: the
+    preferred projection, else the sole one). :meth:`set_projection` drops
+    the cached stores so no read keeps answering from the old projection.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, projection: str | None = None) -> None:
         self._stores: dict[Path, DatasetStore] = {}
+        self._projection = projection
+
+    @property
+    def projection(self) -> str | None:
+        return self._projection
+
+    def set_projection(self, projection: str | None) -> None:
+        """Read intensity from ``projection`` from now on."""
+        if projection != self._projection:
+            self._projection = projection
+            self._stores.clear()
 
     def _store(self, handle: DatasetHandle) -> DatasetStore:
         path = handle.path
         if path not in self._stores:
-            self._stores[path] = DatasetStore(path)
+            self._stores[path] = DatasetStore(path, projection=self._projection)
         return self._stores[path]
 
     def close(self, handle: DatasetHandle) -> None:
@@ -239,6 +257,13 @@ class Hdf5DatasetRepository:
         attrs: dict[str, Any] | None = None,
     ) -> None:
         self._store(handle).write_array(path, data, attrs=attrs)
+
+    def rewrite_projections(
+        self,
+        handle: DatasetHandle,
+        fn: Callable[[NDArray | None], tuple[NDArray, dict[str, Any]] | None],
+    ) -> int:
+        return self._store(handle).rewrite_projections(fn)
 
     def read_array(
         self, handle: DatasetHandle, path: str, view_bin: int = 1

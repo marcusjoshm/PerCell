@@ -27,6 +27,14 @@ class FakeRepo:
     def write_array(self, handle, path, data, attrs=None):
         self.arrays[path] = data
 
+    def rewrite_projections(self, handle, fn):
+        result = fn(self.arrays.get("intensity"))
+        if result is None:
+            self.arrays.pop("intensity", None)
+        else:
+            self.write_array(handle, "intensity", result[0], attrs=result[1])
+        return 1
+
     def read_array(self, handle, path, view_bin=1):
         if path not in self.arrays:
             raise KeyError(f"Array not found: {path}")

@@ -132,3 +132,18 @@ class ProvisioningCancelledError(PercellError):
     rather than a failure. By the time it is raised, no partial download or
     half-extracted runtime is left in the cache.
     """
+
+
+class ProjectionRequiredError(PercellError):
+    """An intensity read cannot tell which z-projection to use.
+
+    Raised when a dataset holds several projections and none was chosen and
+    none is the preferred one, when the chosen projection is not stored, or
+    when the dataset holds only a z-series (it is view-only until a
+    projection is added). ``stored`` lists the projections the dataset
+    holds, so a caller can offer them; the message names them too.
+    """
+
+    def __init__(self, message: str, stored: tuple[str, ...] = ()) -> None:
+        self.stored: tuple[str, ...] = tuple(stored)
+        super().__init__(message)

@@ -168,48 +168,39 @@ class ComputeLifetime:
             ).astype(lifetime.dtype, copy=False)
             created_at_bin = int(view_bin)
 
-        # Append (or replace) the lifetime as a new /intensity channel
-        # slice. Mirrors gui/add_layer_dialog._write_layer's Channel branch
-        # so the on-disk shape contract stays consistent: 2D → (2, H, W),
-        # (C, H, W) → (C+1, H, W). Replacing a same-named channel updates
-        # the slice in-place without growing C.
+        # Append (or replace) the lifetime as a new intensity channel slice,
+        # in every stored projection. Mirrors gui/add_layer_dialog._write_layer's
+        # Channel branch so the on-disk shape contract stays consistent:
+        # 2D → (2, H, W), (C, H, W) → (C+1, H, W). Replacing a same-named
+        # channel updates the slice in-place without growing C.
         channel_name = lifetime_channel_name(channel, source)
         names = list(meta.get("channel_names", []))
-        existing: NDArray | None = None
-        try:
-            existing = self._repo.read_array(handle, "intensity")
-        except KeyError:
-            existing = None
-
         lifetime_2d = lifetime.astype(np.float32, copy=False)
-        if existing is None:
-            stacked = lifetime_2d
-            dims = ["H", "W"]
-            names = [channel_name]
-        elif channel_name in names:
-            # Overwrite existing slice in place.
-            idx = names.index(channel_name)
-            if existing.ndim == 2:
-                stacked = lifetime_2d
-                dims = ["H", "W"]
-            else:
+        replace_idx = names.index(channel_name) if channel_name in names else None
+        extra_attrs: dict = {}
+        if created_at_bin is not None:
+            extra_attrs["created_at_bin"] = created_at_bin
+
+        def _with_lifetime(existing: NDArray | None) -> tuple[NDArray, dict]:
+            if existing is None:
+                return lifetime_2d, {"dims": ["H", "W"], **extra_attrs}
+            if replace_idx is not None:
+                if existing.ndim == 2:
+                    return lifetime_2d, {"dims": ["H", "W"], **extra_attrs}
                 stacked = existing.copy()
-                stacked[idx] = lifetime_2d
-                dims = ["C", "H", "W"]
-        else:
-            if existing.ndim == 2:
+                stacked[replace_idx] = lifetime_2d
+            elif existing.ndim == 2:
                 stacked = np.stack([existing, lifetime_2d], axis=0)
             else:
-                stacked = np.concatenate(
-                    [existing, lifetime_2d[np.newaxis]], axis=0
-                )
-            dims = ["C", "H", "W"]
-            names.append(channel_name)
+                stacked = np.concatenate([existing, lifetime_2d[np.newaxis]], axis=0)
+            return stacked, {"dims": ["C", "H", "W"], **extra_attrs}
 
-        write_attrs: dict = {"dims": dims}
-        if created_at_bin is not None:
-            write_attrs["created_at_bin"] = created_at_bin
-        self._repo.write_array(handle, "intensity", stacked, attrs=write_attrs)
+        had_intensity = self._repo.array_exists(handle, "intensity")
+        self._repo.rewrite_projections(handle, _with_lifetime)
+        if not had_intensity:
+            names = [channel_name]
+        elif replace_idx is None:
+            names.append(channel_name)
 
         # Persist channel_names + n_channels to /metadata so the new
         # channel survives a reload, and refresh the session's in-memory

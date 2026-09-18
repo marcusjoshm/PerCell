@@ -99,6 +99,17 @@ class FakeRepo:
                 self.array_attrs: dict[str, dict] = {}
             self.array_attrs[path] = dict(attrs)
 
+    def rewrite_projections(self, handle, fn):
+        result = fn(self.written_arrays.get("intensity"))
+        if result is None:
+            self.written_arrays.pop("intensity", None)
+        else:
+            self.write_array(handle, "intensity", result[0], attrs=result[1])
+        return 1
+
+    def array_exists(self, handle, path):
+        return path in self.written_arrays
+
     def read_array(self, handle, path, view_bin=1):
         if path not in self.written_arrays:
             raise KeyError(f"Array not found: {path}")
