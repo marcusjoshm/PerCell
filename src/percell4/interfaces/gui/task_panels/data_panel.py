@@ -26,6 +26,16 @@ from percell4.gui._dialog_utils import message_box, text_input
 from percell4.model import CellDataModel
 
 
+def _format_z_line(projection: str | None, spacing_um: float | None) -> str | None:
+    """Describe an in-file import's Z projection; None for token imports."""
+    if not projection:
+        return None
+    text = f"Z stack: {projection} projection"
+    if spacing_um is not None:
+        text += f", {float(spacing_um):.4g} µm apart"
+    return text
+
+
 def _format_pixel_size_lines(
     pixel_size_um: float | None, active_bin: int,
 ) -> str:
@@ -386,6 +396,11 @@ class DataPanel(QWidget):
             pixel_size_lines = _format_pixel_size_lines(
                 pixel_size_um, active_bin,
             )
+            z_line = _format_z_line(
+                meta.get("z_projection"), meta.get("z_spacing_um"),
+            )
+            if z_line:
+                pixel_size_lines = f"{pixel_size_lines}\n{z_line}"
             # Read the description in its own guard: a description that
             # fails to read must not blank the facts above it.
             if description is _UNSET:

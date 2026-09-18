@@ -220,3 +220,45 @@ def test_inspect_import_is_qt_free():
     from percell4.interfaces.cli import inspect_dataset  # noqa: F401
     qt_after = {m for m in sys.modules if "PyQt" in m or "qtpy" in m or "napari" in m}
     assert not (qt_after - qt_before)
+
+
+def _make_infile_dataset(path: Path) -> None:
+    store = DatasetStore(path)
+    store.create(metadata={
+        "channel_names": ["ch0", "ch1", "ch2"],
+        "pixel_size_um": 0.041,
+        "z_spacing_um": 0.125,
+        "z_projection": "mip",
+        "source_series": 0,
+    })
+    store.write_array(
+        "intensity", np.zeros((3, 8, 8), dtype=np.float32), attrs={"dims": ["C", "H", "W"]}
+    )
+
+
+def test_inspect_shows_z_projection_and_spacing(tmp_path, capsys):
+    p = tmp_path / "infile.h5"
+    _make_infile_dataset(p)
+    assert cli.main([str(p)]) == 0
+    out = capsys.readouterr().out
+    assert "Z stack:     mip projection, 0.125 µm apart" in out
+
+
+def test_inspect_json_includes_z_fields(tmp_path, capsys):
+    p = tmp_path / "infile.h5"
+    _make_infile_dataset(p)
+    assert cli.main([str(p), "--json"]) == 0
+    meta = json.loads(capsys.readouterr().out)[0]["metadata"]
+    assert meta["z_spacing_um"] == 0.125
+    assert meta["z_projection"] == "mip"
+
+
+def test_inspect_without_z_fields_shows_placeholder(tmp_path, capsys):
+    p = tmp_path / "ds.h5"
+    _make_dataset(p)
+    assert cli.main([str(p)]) == 0
+    assert "Z stack:     —" in capsys.readouterr().out
+    assert cli.main([str(p), "--json"]) == 0
+    meta = json.loads(capsys.readouterr().out)[0]["metadata"]
+    assert meta["z_spacing_um"] is None
+    assert meta["z_projection"] is None

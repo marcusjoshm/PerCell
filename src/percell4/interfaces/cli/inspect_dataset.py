@@ -60,6 +60,16 @@ def _fmt_pixel_size(value: Any) -> str:
         return f"{float(value):.4g} µm/px"
 
 
+def _fmt_z_stack(projection: Any, spacing: Any) -> str:
+    """Describe an in-file import's Z projection, '—' for token imports."""
+    if not projection:
+        return "—"
+    text = f"{projection} projection"
+    if spacing is not None:
+        text += f", {float(spacing):.4g} µm apart"
+    return text
+
+
 def _fmt_resolution(native_shape: Any) -> str:
     if not native_shape:
         return "—"
@@ -112,6 +122,8 @@ def _inspect(path: Path) -> dict[str, Any]:
                 list(meta["native_shape"]) if meta.get("native_shape") else None
             ),
             "pixel_size_um": meta.get("pixel_size_um"),
+            "z_spacing_um": meta.get("z_spacing_um"),
+            "z_projection": meta.get("z_projection"),
             "n_timepoints": meta.get("n_timepoints"),
             "creation_bin": meta.get("creation_bin"),
             "source": meta.get("source"),
@@ -169,6 +181,7 @@ def _print_human(info: dict[str, Any]) -> None:
     print(f"Size:        {_human_size(info['size_bytes'])}")
     print(f"Resolution:  {_fmt_resolution(m['native_shape'])}")
     print(f"Pixel size:  {_fmt_pixel_size(m['pixel_size_um'])}")
+    print(f"Z stack:     {_fmt_z_stack(m['z_projection'], m['z_spacing_um'])}")
     print(f"Timepoints:  {m['n_timepoints'] if m['n_timepoints'] is not None else '—'}")
     channels = m["channel_names"]
     print(f"Channels:    {', '.join(channels) if channels else '—'}")

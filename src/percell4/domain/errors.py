@@ -117,6 +117,14 @@ class BioformatsReadError(PercellError):
     """
 
 
+class ImportCancelledError(PercellError):
+    """The user cancelled an in-file import before it finished.
+
+    The importer raises this after removing its temporary file, so a
+    cancelled import leaves no dataset file behind.
+    """
+
+
 class ProvisioningCancelledError(PercellError):
     """The user cancelled a Java or Bio-Formats download.
 

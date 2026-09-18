@@ -16,6 +16,7 @@ from percell4.domain.dataset import DatasetHandle
 from percell4.interfaces.gui.task_panels.data_panel import (
     DataPanel,
     _format_pixel_size_lines,
+    _format_z_line,
 )
 from percell4.model import CellDataModel
 from percell4.store import DatasetStore
@@ -45,6 +46,18 @@ def test_format_pixel_size_lines_unknown_when_zero():
     """Defensive: a stored zero or negative renders as unknown."""
     assert _format_pixel_size_lines(0.0, active_bin=1) == "Pixel size: unknown"
     assert _format_pixel_size_lines(-0.1, active_bin=1) == "Pixel size: unknown"
+
+
+def test_format_z_line_projection_and_spacing():
+    assert _format_z_line("mip", 0.125) == "Z stack: mip projection, 0.125 µm apart"
+
+
+def test_format_z_line_projection_without_spacing():
+    assert _format_z_line("sum", None) == "Z stack: sum projection"
+
+
+def test_format_z_line_absent_for_token_imports():
+    assert _format_z_line(None, None) is None
 
 
 # ── Qt-backed integration tests (real DataPanel + DatasetStore) ───────
@@ -160,3 +173,16 @@ def test_info_label_no_dataset_unchanged(qtbot, tmp_path):
     qtbot.addWidget(p)
     p.refresh_dataset_info()
     assert p._info_label.text() == "No dataset loaded"
+
+
+def test_info_label_has_no_z_line_without_z_metadata(panel_with_pixel_size):
+    panel, _session, _store = panel_with_pixel_size
+    panel.refresh_dataset_info()
+    assert "Z stack" not in panel._info_label.text()
+
+
+def test_info_label_shows_z_line_for_in_file_dataset(panel_with_pixel_size):
+    panel, _session, store = panel_with_pixel_size
+    store.set_metadata({"z_projection": "mip", "z_spacing_um": 0.125})
+    panel.refresh_dataset_info()
+    assert "Z stack: mip projection, 0.125 µm apart" in panel._info_label.text()

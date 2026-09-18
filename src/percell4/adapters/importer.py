@@ -27,6 +27,7 @@ from percell4.domain.io.cross_format import (
     IntensityChannel,
     match_bin_to_intensity,
 )
+from percell4.domain.io.infile import ImportSource
 from percell4.domain.io.models import (
     BaseStemRule,
     CompositeRule,
@@ -46,6 +47,7 @@ from percell4.domain.io.view_bin import (
     mode_labels,
     sum_bin_2d,
 )
+from percell4.ports.image_reader import ImageReader
 from percell4.project import ProjectIndex
 from percell4.store import DatasetStore, SourceShapeMismatchError
 
@@ -1051,6 +1053,147 @@ def import_dataset(
 
     _progress(5, 5, "Import complete")
     return len(channel_images)
+
+
+def import_infile_dataset(
+    source: ImportSource,
+    output_h5: str | Path,
+    reader: ImageReader,
+    *,
+    z_method: str = "mip",
+    project_csv: str | Path | None = None,
+    creation_bin: int = 1,
+    metadata: dict[str, Any] | None = None,
+    on_plane: Callable[[int, int], None] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
+    output_dir: str | Path | None = None,
+) -> int:
+    """Import one in-file source (a file's series) into a new ``.h5``.
+
+    The reader streams one Z-projected ``(H, W)`` plane per (timepoint,
+    channel). The planes use the store's existing layouts: ``(H, W)``,
+    ``(C, H, W)``, ``(T, H, W)`` or ``(T, C, H, W)`` float32. Channel tokens
+    are the file's channel indices, named through ``channel_display_name``.
+
+    The file is written to a temporary path beside ``output_h5`` and moved
+    into place only when complete, so cancel or failure leaves no dataset
+    file. An existing output is replaced as a whole. ``import_dataset`` is
+    not involved; token imports are unchanged.
+
+    Returns the number of channels written.
+
+    Raises
+    ------
+    ImportSchemeError
+        The source changed since the scan, or the output lies outside
+        ``output_dir``.
+    ImportCancelledError
+        ``is_cancelled`` returned True before every plane was read.
+    """
+    from percell4.domain.errors import ImportCancelledError, ImportSchemeError
+
+    if creation_bin < 1:
+        raise ValueError(f"creation_bin must be >= 1, got {creation_bin}")
+    if source.series is None:
+        raise ImportSchemeError(f"{source.path}: the source carries no probe record")
+    series = source.effective
+    path = Path(source.path)
+    output_h5 = Path(output_h5)
+
+    if output_dir is not None:
+        root = Path(output_dir).resolve()
+        target = output_h5.resolve()
+        if root != target.parent and root not in target.parents:
+            raise ImportSchemeError(f"output {output_h5} is outside the output folder {output_dir}")
+
+    try:
+        st = path.stat()
+    except OSError as exc:
+        raise ImportSchemeError(f"{path}: cannot read the source ({exc})") from exc
+    if (source.expected_size is not None and st.st_size != source.expected_size) or (
+        source.expected_mtime_ns is not None and st.st_mtime_ns != source.expected_mtime_ns
+    ):
+        raise ImportSchemeError(f"{path.name} changed since it was scanned; scan it again")
+
+    channels = tuple(source.channel_indices) or tuple(range(series.channel_count))
+    n_t = max(1, int(series.size_t))
+    cancelled = is_cancelled or (lambda: False)
+
+    planes: dict[tuple[int, int], np.ndarray] = {}
+    for t, c, plane in reader.read_projected(
+        source, z_method, on_plane=on_plane, is_cancelled=cancelled
+    ):
+        if creation_bin > 1:
+            plane = sum_bin_2d(plane, creation_bin)
+        planes[(int(t), int(c))] = np.asarray(plane, dtype=np.float32)
+    if cancelled() or len(planes) != n_t * len(channels):
+        raise ImportCancelledError(f"import of {path.name} was cancelled")
+
+    per_t = [np.stack([planes[(t, c)] for c in channels], axis=0) for t in range(n_t)]
+    if n_t > 1:
+        intensity = np.stack(per_t, axis=0)  # (T, C, H, W)
+        dims = ["T", "C", "H", "W"]
+        if len(channels) == 1:
+            intensity, dims = intensity[:, 0], ["T", "H", "W"]
+    else:
+        intensity, dims = per_t[0], ["C", "H", "W"]
+        if len(channels) == 1:
+            intensity, dims = intensity[0], ["H", "W"]
+    height, width = intensity.shape[-2:]
+
+    all_metadata: dict[str, Any] = {
+        "source_dir": str(path.parent),
+        "source_file": str(path),
+        "source_series": int(source.series_index),
+        "channel_names": [channel_display_name(str(c)) for c in channels],
+        "n_channels": len(channels),
+        "creation_bin": int(creation_bin),
+        "n_timepoints": n_t,
+        "native_shape": (int(height), int(width)),
+        "z_projection": z_method,
+    }
+    if series.physical_x_um is not None and series.physical_x_um > 0:
+        all_metadata["pixel_size_um"] = float(series.physical_x_um) * int(creation_bin)
+    if series.physical_z_um is not None and series.physical_z_um > 0:
+        all_metadata["z_spacing_um"] = float(series.physical_z_um)
+    if metadata:
+        all_metadata.update(metadata)
+
+    _write_atomically(
+        output_h5,
+        lambda store: (
+            store.create(metadata=all_metadata),
+            store.write_array("intensity", intensity, attrs={"dims": dims}),
+        ),
+    )
+
+    if project_csv is not None:
+        idx = ProjectIndex(project_csv)
+        if not idx.exists():
+            idx.create()
+        idx.add_dataset(str(output_h5), status="complete")
+    return len(channels)
+
+
+def _write_atomically(output_h5: Path, build: Callable[[DatasetStore], Any]) -> None:
+    """Build a dataset at a temp path beside ``output_h5``, then move it in place.
+
+    Mirrors :meth:`DatasetStore.create_atomic` but builds through the store's
+    own writers, so the layout matches every other import.
+    """
+    import os
+    import tempfile
+
+    output_h5.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(suffix=".h5.tmp", dir=output_h5.parent)
+    os.close(fd)
+    try:
+        build(DatasetStore(tmp))
+        os.replace(tmp, output_h5)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def _group_by_channel(result: ScanResult) -> dict[str, list]:

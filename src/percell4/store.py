@@ -1461,6 +1461,14 @@ class DatasetStore:
                 attrs["creation_bin"] = int(attrs["creation_bin"])
             if "n_timepoints" in attrs:
                 attrs["n_timepoints"] = int(attrs["n_timepoints"])
+            # In-file import provenance: plain Python types, as for the keys
+            # above, so callers and JSON output never see numpy scalars.
+            if "z_spacing_um" in attrs:
+                attrs["z_spacing_um"] = float(attrs["z_spacing_um"])
+            if "source_series" in attrs:
+                attrs["source_series"] = int(attrs["source_series"])
+            if isinstance(attrs.get("z_projection"), bytes):
+                attrs["z_projection"] = attrs["z_projection"].decode()
             if "stitch_overlap" in attrs:
                 attrs["stitch_overlap"] = float(attrs["stitch_overlap"])
             if "stitch_registered" in attrs:
