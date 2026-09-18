@@ -91,8 +91,16 @@ ocr = [
     "Pillow>=10",
     "openpyxl>=3.1",
 ]
+# In-file multi-dimensional import through OME Bio-Formats. JPype drives the
+# JVM; cjdk fetches a pinned JRE on first use (with consent). Neither a JRE nor
+# the GPL Bio-Formats jar is ever shipped in a PerCell artifact -- both are
+# fetched to the user's machine (see percell4.adapters.java_runtime).
+bioformats = [
+    "jpype1>=1.7",
+    "cjdk>=0.5",
+]
 all = [
-    "percell4[gpu,flim,imagej,ocr]",
+    "percell4[gpu,flim,imagej,ocr,bioformats]",
 ]
 dev = [
     "pytest>=7.4",

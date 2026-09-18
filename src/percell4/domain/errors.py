@@ -85,3 +85,32 @@ class ImportSchemeError(PercellError):
     output name that would escape the output directory. The message names the
     failing field so the user can fix the scheme file by hand.
     """
+
+
+class JavaUnavailableError(PercellError):
+    """No working Java runtime could be found or provisioned.
+
+    Raised when every candidate (the ``java_home`` setting, ``JAVA_HOME``, the
+    PerCell cache) fails its ``java -version`` probe and provisioning is not
+    possible: no consent, no network, a checksum mismatch, or a platform with
+    no pinned runtime. The message says what was tried and names the manual
+    steps, so it can be shown to the user verbatim.
+    """
+
+
+class BioformatsUnavailableError(PercellError):
+    """The pinned Bio-Formats jar is missing and could not be fetched.
+
+    Same shape as :class:`JavaUnavailableError`: the message names the
+    failure (offline, checksum mismatch, non-HTTPS URL) and the manual
+    alternative (set ``bioformats_jar`` in Advanced settings).
+    """
+
+
+class ProvisioningCancelledError(PercellError):
+    """The user cancelled a Java or Bio-Formats download.
+
+    Distinct from the unavailable errors so callers can treat it as a choice
+    rather than a failure. By the time it is raised, no partial download or
+    half-extracted runtime is left in the cache.
+    """

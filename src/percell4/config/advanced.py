@@ -1,8 +1,8 @@
 """Persistent store for expert-only configuration.
 
-Backs the launcher's Advanced panel. Holds one setting today -- the Cellpose
-device override -- and is shaped so later advanced settings can join it
-without re-deciding the mechanism.
+Backs the launcher's Advanced panel. Holds the Cellpose device override and
+the Java / Bio-Formats settings used by in-file import (see
+``percell4.adapters.java_runtime``).
 
 **Why not QSettings.** ``percell4.gui.settings.app_settings`` is the
 established preference store, but it imports ``qtpy``, and the batch CLI has
@@ -29,7 +29,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +54,14 @@ CONFIG_FILENAME = "advanced_settings.json"
 #: researcher's real preferences.
 _redirect: Callable[[], Path] | None = None
 
+#: String fields where a cleared text box ("" or "   ") means "unset".
+_BLANK_MEANS_UNSET = (
+    "cellpose_device",
+    "java_home",
+    "bioformats_jar",
+    "java_download_consent",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AdvancedSettings:
@@ -63,13 +71,30 @@ class AdvancedSettings:
     #: auto-detect, which is what every unconfigured install does.
     cellpose_device: str | None = None
 
+    #: A Java home directory to use before ``JAVA_HOME`` and the PerCell cache.
+    java_home: str | None = None
+
+    #: A ``bioformats_package.jar`` to use instead of the cached, pinned one.
+    bioformats_jar: str | None = None
+
+    #: Maximum JVM heap for the Bio-Formats reader process, in MiB. ``None``
+    #: leaves the reader's own default in place.
+    java_max_heap_mb: int | None = None
+
+    #: The pinned-artifact token the user agreed to download. Compared against
+    #: ``java_runtime.CONSENT_TOKEN``, so a later version bump asks again.
+    java_download_consent: str | None = None
+
     def __post_init__(self) -> None:
-        # A cleared text field arrives as "" or "   ". Both mean auto; storing
+        # A cleared text field arrives as "" or "   ". Both mean unset; storing
         # either verbatim would make every later run probe a device named
-        # empty-string and report a fallback nobody asked for.
-        if self.cellpose_device is not None:
-            cleaned = self.cellpose_device.strip()
-            object.__setattr__(self, "cellpose_device", cleaned or None)
+        # empty-string (or a Java home at "") and report a fallback nobody
+        # asked for.
+        for name in _BLANK_MEANS_UNSET:
+            value = getattr(self, name)
+            if isinstance(value, str):
+                cleaned = value.strip()
+                object.__setattr__(self, name, cleaned or None)
 
 
 def _default_config_dir() -> Path:
@@ -142,19 +167,48 @@ def _read_raw() -> dict[str, Any]:
     return data
 
 
-def load_advanced_settings() -> AdvancedSettings:
-    """Read the stored settings, falling back to defaults on any problem."""
-    raw = _read_raw()
-
-    device = raw.get("cellpose_device")
-    if device is not None and not isinstance(device, str):
+def _optional_str(raw: dict[str, Any], key: str) -> str | None:
+    """Read ``key`` as an optional string; anything else is ignored with a log."""
+    value = raw.get(key)
+    if value is not None and not isinstance(value, str):
         logger.warning(
-            "advanced settings: cellpose_device is %s, expected a string; ignoring.",
-            type(device).__name__,
+            "advanced settings: %s is %s, expected a string; ignoring.",
+            key,
+            type(value).__name__,
         )
-        device = None
+        return None
+    return value
 
-    return AdvancedSettings(cellpose_device=device)
+
+def _optional_positive_int(raw: dict[str, Any], key: str) -> int | None:
+    """Read ``key`` as an optional positive int. ``True`` is not a heap size."""
+    value = raw.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        logger.warning(
+            "advanced settings: %s is %r, expected a positive integer; ignoring.",
+            key,
+            value,
+        )
+        return None
+    return value
+
+
+def load_advanced_settings() -> AdvancedSettings:
+    """Read the stored settings, falling back to defaults on any problem.
+
+    Each field falls back on its own: one hand-mangled value must not take the
+    others down with it.
+    """
+    raw = _read_raw()
+    return AdvancedSettings(
+        cellpose_device=_optional_str(raw, "cellpose_device"),
+        java_home=_optional_str(raw, "java_home"),
+        bioformats_jar=_optional_str(raw, "bioformats_jar"),
+        java_max_heap_mb=_optional_positive_int(raw, "java_max_heap_mb"),
+        java_download_consent=_optional_str(raw, "java_download_consent"),
+    )
 
 
 def save_advanced_settings(settings: AdvancedSettings) -> None:
@@ -167,6 +221,10 @@ def save_advanced_settings(settings: AdvancedSettings) -> None:
     path = config_path()
     raw = _read_raw()
     raw["cellpose_device"] = settings.cellpose_device
+    raw["java_home"] = settings.java_home
+    raw["bioformats_jar"] = settings.bioformats_jar
+    raw["java_max_heap_mb"] = settings.java_max_heap_mb
+    raw["java_download_consent"] = settings.java_download_consent
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -175,6 +233,18 @@ def save_advanced_settings(settings: AdvancedSettings) -> None:
         # A read-only home directory should degrade to "setting doesn't stick",
         # not take down the panel that wrote it.
         logger.warning("could not write advanced settings to %s: %s", path, exc)
+
+
+def update_advanced_settings(**changes: Any) -> AdvancedSettings:
+    """Change the named fields, keep every other stored field, and save.
+
+    The safe way for one surface to write its own setting: building a fresh
+    :class:`AdvancedSettings` with one field set and saving it would reset
+    every other field to its default. Returns what was saved.
+    """
+    settings = replace(load_advanced_settings(), **changes)
+    save_advanced_settings(settings)
+    return settings
 
 
 def load_cellpose_device() -> str | None:
