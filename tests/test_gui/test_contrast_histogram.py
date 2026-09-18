@@ -112,3 +112,57 @@ def test_lazy_volume_histogram_reads_no_extra_planes(viewer):
     data = displayed_data(layer)
     assert data.shape == (9, 4, 4)
     assert len(reads) == before
+
+
+# ── free-floating window and its toggle ───────────────────────
+
+
+def test_window_close_only_hides_and_reports_it(qtbot, viewer):
+    from percell4.gui.contrast_histogram import ContrastWindow
+
+    _image(viewer, np.random.rand(8, 8).astype(np.float32))
+    window = ContrastWindow(viewer)
+    qtbot.addWidget(window)
+    seen = []
+    window.visibility_changed.connect(seen.append)
+    window.show()
+    assert window.isWindow() and window.parent() is None
+    window.close()
+    assert not window.isVisible()
+    assert seen == [True, False]
+    assert window.histogram.layer is not None  # kept for reopening
+
+
+def test_panel_button_opens_and_follows_the_window(qtbot, viewer):
+    from qtpy.QtCore import QObject, Signal
+
+    from percell4.gui.contrast_histogram import ContrastWindow
+    from percell4.interfaces.gui.task_panels.viewer_panel import ViewerPanel
+
+    class _FakeViewerWin(QObject):
+        contrast_visibility_changed = Signal(bool)
+
+        def __init__(self):
+            super().__init__()
+            self.window = ContrastWindow(viewer)
+            self.window.visibility_changed.connect(self.contrast_visibility_changed.emit)
+
+        def set_contrast_visible(self, visible):
+            self.window.setVisible(visible)
+
+    from percell4.model import CellDataModel
+
+    fake = _FakeViewerWin()
+    qtbot.addWidget(fake.window)
+    panel = ViewerPanel(CellDataModel(), show_window=lambda _n: None,
+                        get_viewer_window=lambda: fake)
+    qtbot.addWidget(panel)
+
+    panel._contrast_btn.setChecked(True)
+    assert fake.window.isVisible()
+    fake.window.close()  # the window's own close button
+    assert not panel._contrast_btn.isChecked()
+    panel._contrast_btn.setChecked(True)
+    assert fake.window.isVisible()
+    panel._contrast_btn.setChecked(False)
+    assert not fake.window.isVisible()

@@ -87,6 +87,16 @@ class ViewerPanel(QWidget):
         btn_hide.clicked.connect(self._on_hide_viewer)
         layout.addWidget(btn_hide)
 
+        self._contrast_btn = QPushButton("Contrast Histogram")
+        self._contrast_btn.setCheckable(True)
+        self._contrast_btn.setToolTip(
+            "Open or close the Contrast window: the selected image layer's "
+            "histogram with draggable contrast limits."
+        )
+        self._contrast_btn.toggled.connect(self._on_contrast_toggled)
+        layout.addWidget(self._contrast_btn)
+        self._contrast_source = None
+
         # ── Z-series group (only when the dataset stores one) ──
         self._zseries_group = QGroupBox("Z-series")
         z_layout = QVBoxLayout(self._zseries_group)
@@ -141,6 +151,25 @@ class ViewerPanel(QWidget):
         win = self._get_viewer_window()
         if win is not None:
             win.hide()
+
+    def _on_contrast_toggled(self, checked: bool) -> None:
+        win = self._get_viewer_window()
+        if win is None and checked:
+            self._show_window("viewer")
+            win = self._get_viewer_window()
+        if win is None:
+            return
+        if win is not self._contrast_source:
+            # Follow the window's own close button too.
+            win.contrast_visibility_changed.connect(self._on_contrast_visibility)
+            self._contrast_source = win
+        win.set_contrast_visible(bool(checked))
+
+    def _on_contrast_visibility(self, visible: bool) -> None:
+        if self._contrast_btn.isChecked() != visible:
+            self._contrast_btn.blockSignals(True)
+            self._contrast_btn.setChecked(visible)
+            self._contrast_btn.blockSignals(False)
 
     # ── State change routing ─────────────────────────────────
 

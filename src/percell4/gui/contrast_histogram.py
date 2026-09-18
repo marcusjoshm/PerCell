@@ -16,7 +16,7 @@ reads the file itself; large slices are subsampled with a stride.
 from __future__ import annotations
 
 import numpy as np
-from qtpy.QtCore import QTimer
+from qtpy.QtCore import QTimer, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -241,3 +241,35 @@ class ContrastHistogram(QWidget):
         """Set the limits to the layer's full range."""
         if self._layer is not None:
             self._layer.contrast_limits = tuple(self._layer.contrast_limits_range)
+
+
+class ContrastWindow(QWidget):
+    """The histogram in its own free-floating window.
+
+    Closing it only hides it, so reopening keeps its size and place.
+    ``visibility_changed`` lets a toggle button follow the window, also when
+    the user closes it from its title bar.
+    """
+
+    visibility_changed = Signal(bool)
+
+    def __init__(self, viewer) -> None:
+        super().__init__(None)
+        self.setWindowTitle("PerCell4 \u2014 Contrast")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.histogram = ContrastHistogram(viewer, self)
+        layout.addWidget(self.histogram)
+        self.resize(460, 280)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.visibility_changed.emit(True)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self.visibility_changed.emit(False)
+
+    def closeEvent(self, event) -> None:
+        event.ignore()
+        self.hide()

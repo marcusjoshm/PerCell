@@ -154,6 +154,10 @@ class ViewerWindow(QObject):
     # viewer-level keymap.
     multi_select_requested = Signal()
 
+    # Emitted when the Contrast histogram window is shown or hidden, so the
+    # launcher's toggle button follows it (also when closed from its title bar).
+    contrast_visibility_changed = Signal(bool)
+
     def __init__(self, data_model: CellDataModel) -> None:
         super().__init__()
         self.data_model = data_model
@@ -170,6 +174,8 @@ class ViewerWindow(QObject):
         self._hidden_mask_layers: dict[str, float] = {}  # {layer_name: original_opacity}
         # Held so Qt doesn't GC the multi-select controller mid-session.
         self._multi_select_controller = None
+        # The free-floating Contrast histogram window, created on first use.
+        self._contrast_window = None
         _VIEWER_WINDOWS.add(self)
 
     def _is_alive(self) -> bool:
@@ -188,9 +194,11 @@ class ViewerWindow(QObject):
         if self._viewer is not None and self._is_alive():
             return
 
-        # Clean up stale references
+        # Clean up stale references. A Contrast window bound to the old
+        # viewer goes with it; it is rebuilt for the new one when reopened.
         self._viewer = None
         self._qt_window = None
+        self._drop_contrast_window()
 
         import napari
 
@@ -217,19 +225,7 @@ class ViewerWindow(QObject):
         # events) and acts as the timepoint Selector.
         self._viewer.dims.events.current_step.connect(self._on_dims_current_step)
 
-        self._add_contrast_dock()
         self._restore_geometry()
-
-    def _add_contrast_dock(self) -> None:
-        """Dock the histogram contrast control (never blocks the viewer)."""
-        try:
-            from percell4.gui.contrast_histogram import ContrastHistogram
-
-            self._contrast_dock = self._viewer.window.add_dock_widget(
-                ContrastHistogram(self._viewer), name="Contrast", area="right"
-            )
-        except Exception:  # noqa: BLE001 - the viewer works without it
-            logger.exception("could not add the contrast histogram")
 
     @property
     def viewer(self):
@@ -292,6 +288,41 @@ class ViewerWindow(QObject):
         if self._is_alive():
             self._save_geometry()
             self._qt_window.hide()
+        self.set_contrast_visible(False)
+
+    # -- Contrast histogram window ---------------------------------------
+
+    def contrast_visible(self) -> bool:
+        window = self._contrast_window
+        return window is not None and window.isVisible()
+
+    def set_contrast_visible(self, visible: bool) -> None:
+        """Open (creating the viewer if needed) or close the Contrast window."""
+        if not visible:
+            if self._contrast_window is not None:
+                self._contrast_window.hide()
+            return
+        self._ensure_viewer()
+        if self._contrast_window is None:
+            from percell4.gui.contrast_histogram import ContrastWindow
+
+            self._contrast_window = ContrastWindow(self._viewer)
+            self._contrast_window.visibility_changed.connect(
+                self.contrast_visibility_changed.emit
+            )
+        self._contrast_window.show()
+        self._contrast_window.raise_()
+        self._contrast_window.activateWindow()
+
+    def _drop_contrast_window(self) -> None:
+        window = self._contrast_window
+        self._contrast_window = None
+        if window is not None:
+            try:
+                window.hide()
+                window.deleteLater()
+            except RuntimeError:
+                pass
 
     def add_image(self, data, name: str, **kwargs) -> None:
         """Add an image layer with auto-detected colormap and additive blending."""
