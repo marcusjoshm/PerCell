@@ -428,3 +428,16 @@ def test_projector_holds_one_plane_per_projection():
     assert float(out["max"][0, 0]) == 29
     assert float(out["sum"][0, 0]) == sum(range(30))
     assert float(out["mean"][0, 0]) == pytest.approx(14.5)
+
+
+def test_single_plane_source_imports_into_intensity_as_today(tmp_path):
+    """R4: no Z axis, so the storage choice does not apply."""
+    stack = _stack(t=3, c=2, z=1)
+    source, reader = _source_for(tmp_path / "a.tif", stack)
+    out = tmp_path / "a.h5"
+    import_infile_dataset(source, out, reader, storage=_storage("mean", "zseries"))
+    store = DatasetStore(out)
+    assert store.resolved_intensity_path() == "intensity"
+    assert not store.has_zseries()
+    np.testing.assert_array_equal(store.read_array("intensity"), stack[:, :, 0].astype(np.float32))
+    assert store.metadata["z_projection"] == "mip"

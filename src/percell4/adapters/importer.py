@@ -20,6 +20,7 @@ from percell4.domain.io.assembler import (
     RegistrationError,
     assemble_channels,
     assemble_tiles,
+    ordered_z_tokens,
     project_z,
     stack_timepoints,
 )
@@ -37,7 +38,11 @@ from percell4.domain.io.models import (
     ZeroPadOffsetRule,
 )
 from percell4.domain.io.naming import channel_display_name
-from percell4.domain.io.projections import StorageChoice, method_for_projection
+from percell4.domain.io.projections import (
+    StorageChoice,
+    method_for_projection,
+    projection_for_method,
+)
 from percell4.domain.io.scanner import FileScanner
 from percell4.domain.io.timepoints import (
     count_timepoints,
@@ -109,6 +114,8 @@ def import_dataset(
     layer_assignments: dict[str, Any] | None = None,
     files: list | None = None,
     creation_bin: int = 1,
+    storage: StorageChoice | None = None,
+    z_step_um: float | None = None,
 ) -> int:
     """Import a directory of TIFFs into a single .h5 dataset.
 
@@ -130,6 +137,13 @@ def import_dataset(
         Defines the dataset's ``/metadata.native_shape``. ``1`` = no
         binning (byte-identical to the pre-binning behavior for the
         array payloads; only the two new metadata keys are added).
+    storage : what to keep from z-stack sources: named projections and/or
+        the z-series. ``None`` keeps one projection by ``z_project_method``.
+        Sources without a Z axis ignore it and import as before, into
+        ``/intensity`` (R4). A kept z-series holds only channels that have a
+        Z axis; ``.bin`` channels join every projection.
+    z_step_um : the z-spacing to record when the first z-plane file carries
+        no ImageJ ``spacing``.
 
     Returns
     -------
@@ -266,6 +280,26 @@ def import_dataset(
     # (or no _t token) datasets keep today's exact 2D / (C, H, W) layout.
     n_timepoints = count_timepoints(intensity_result.timepoints)
 
+    # Storage (z-stack plan KTD1/KTD3). Data with a Z axis stores named
+    # projections; data without one keeps today's /intensity (R4).
+    # ``methods`` are the z methods assembled: the kept projections, or max
+    # alone when only the z-series is kept (it still drives registration,
+    # labels and masks). ``primary`` feeds labels, masks and registration.
+    has_z = len(intensity_result.z_slices) > 1
+    if storage is None and z_project_method is not None:
+        storage = StorageChoice.from_z_method(z_project_method)
+    named = has_z and storage is not None
+    if named:
+        projection_methods = tuple(method_for_projection(n) for n in storage.projections)
+        methods: tuple[str | None, ...] = projection_methods or ("mip",)
+    else:
+        projection_methods = (z_project_method,)
+        methods = (z_project_method,)
+    primary = methods[0]
+    keep_zseries = named and storage.keep_zseries
+    # z-series sources: (channel name, [files per timepoint]).
+    zseries_sources: list[tuple[str, list[list]]] = []
+
     channel_groups = _group_by_channel(intensity_result) if intensity_files else {}
 
     # Filter to selected channels if specified
@@ -276,7 +310,8 @@ def import_dataset(
 
     # 3. Assemble channels (intensity, labels, masks based on layer_assignments)
     _progress(2, 5, "Assembling images...")
-    channel_images: list[np.ndarray] = []
+    channel_images_by_m: dict[str | None, list[np.ndarray]] = {m: [] for m in methods}
+    channel_images = channel_images_by_m[primary]
     channel_names: list[str] = []
     label_layers: list[tuple[str, np.ndarray]] = []  # (name, array)
     mask_layers: list[tuple[str, np.ndarray]] = []   # (name, array)
@@ -312,7 +347,7 @@ def import_dataset(
         # re-stitched at the solved offsets and stay pixel-aligned to the
         # registered intensity canvas.)
         if do_register:
-            per_tp_sinks: list[dict[int, np.ndarray]] = []
+            per_tp_sinks: list[dict[str | None, dict[int, np.ndarray]]] = []
             if n_timepoints > 1:
                 tp_groups = _group_by_timepoint(files)
                 tp_tokens = ordered_timepoint_tokens(tp_groups.keys())
@@ -324,21 +359,17 @@ def import_dataset(
                         "missing frame would mis-stack the time axis.\n"
                         f"  found: {tp_tokens}"
                     )
-                for tp in tp_tokens:
-                    sink: dict[int, np.ndarray] = {}
-                    _assemble_plane(
-                        tp_groups[tp], tile_config, z_project_method,
-                        tile_sink=sink,
-                    )
-                    per_tp_sinks.append(sink)
+                tp_files = [tp_groups[tp] for tp in tp_tokens]
             else:
-                sink = {}
-                _assemble_plane(
-                    files, tile_config, z_project_method, tile_sink=sink
-                )
-                per_tp_sinks.append(sink)
+                tp_files = [files]
+            for group in tp_files:
+                sinks: dict[str | None, dict[int, np.ndarray]] = {m: {} for m in methods}
+                _assemble_planes(group, tile_config, methods, tile_sinks=sinks)
+                per_tp_sinks.append(sinks)
             reg_channel_tiles[layer_name] = per_tp_sinks
             reg_channel_order.append((layer_name, layer_type))
+            if keep_zseries and layer_type == "channel" and len(_group_by_z(tp_files[0])) > 1:
+                zseries_sources.append((layer_name, tp_files))
             continue
 
         if n_timepoints > 1:
@@ -355,13 +386,13 @@ def import_dataset(
                     "would mis-stack the time axis.\n"
                     f"  found: {tp_tokens}"
                 )
-            planes = [
-                _assemble_plane(tp_groups[tp], tile_config, z_project_method)
-                for tp in tp_tokens
-            ]
-            channel_img = stack_timepoints(planes)
+            tp_files = [tp_groups[tp] for tp in tp_tokens]
+            per_tp = [_assemble_planes(group, tile_config, methods) for group in tp_files]
+            images = {m: stack_timepoints([d[m] for d in per_tp]) for m in methods}
         else:
-            channel_img = _assemble_plane(files, tile_config, z_project_method)
+            tp_files = [files]
+            images = _assemble_planes(files, tile_config, methods)
+        channel_img = images[primary]
 
         if layer_type == "segmentation":
             label_layers.append((layer_name, channel_img))
@@ -369,7 +400,10 @@ def import_dataset(
             mask_layers.append((layer_name, channel_img))
         else:
             channel_names.append(layer_name)
-            channel_images.append(channel_img.astype(np.float32))
+            for m in methods:
+                channel_images_by_m[m].append(images[m].astype(np.float32))
+            if keep_zseries and len(_group_by_z(tp_files[0])) > 1:
+                zseries_sources.append((layer_name, tp_files))
 
     # ── Registered overlap path: solve once, assemble every layer at the
     #    solved offsets, freeze geometry for the decay placement below. ──────
@@ -419,7 +453,7 @@ def import_dataset(
             return out
 
         # Reference tiles, post-bin, from the FIRST timepoint (register once).
-        ref_tiles_first = _bin_tiles(reg_channel_tiles[ref_name][0], "channel")
+        ref_tiles_first = _bin_tiles(reg_channel_tiles[ref_name][0][primary], "channel")
         # Capture the ACTUAL post-bin reference tile (h, w) — the real extent
         # the offsets were placed against — so the canvas consistency check at
         # step 4b is non-vacuous (FIX G). All tiles share this shape (R14).
@@ -492,7 +526,7 @@ def import_dataset(
         # Skipped on the grid fallback (offsets are seed positions, not solved).
         if stitch_registered and n_timepoints > 1:
             ref_tiles_last = _bin_tiles(
-                reg_channel_tiles[ref_name][-1], "channel"
+                reg_channel_tiles[ref_name][-1][primary], "channel"
             )
             tile_h_b = next(iter(ref_tiles_first.values())).shape[0]
             tile_w_b = next(iter(ref_tiles_first.values())).shape[1]
@@ -545,22 +579,26 @@ def import_dataset(
         for layer_name, layer_type in reg_channel_order:
             per_tp_sinks = reg_channel_tiles[layer_name]
             fusion = intensity_fusion if layer_type == "channel" else "none"
-            planes = []
-            for sink in per_tp_sinks:
-                binned = _bin_tiles(sink, layer_type)
-                planes.append(
-                    assemble_tiles_with_offsets(
-                        binned,
-                        stitch_offsets,
-                        stitch_canvas,
-                        disconnected=stitch_disconnected,
-                        fusion_method=fusion,
+            layer_methods = methods if layer_type == "channel" else (primary,)
+            layer_images: dict[str | None, np.ndarray] = {}
+            for m in layer_methods:
+                planes = []
+                for sinks in per_tp_sinks:
+                    binned = _bin_tiles(sinks[m], layer_type)
+                    planes.append(
+                        assemble_tiles_with_offsets(
+                            binned,
+                            stitch_offsets,
+                            stitch_canvas,
+                            disconnected=stitch_disconnected,
+                            fusion_method=fusion,
+                        )
                     )
-                )
-            if n_timepoints > 1:
-                layer_img = stack_timepoints(planes)
-            else:
-                layer_img = planes[0]
+                if n_timepoints > 1:
+                    layer_images[m] = stack_timepoints(planes)
+                else:
+                    layer_images[m] = planes[0]
+            layer_img = layer_images[primary]
 
             if layer_type == "segmentation":
                 label_layers.append((layer_name, layer_img))
@@ -568,7 +606,8 @@ def import_dataset(
                 mask_layers.append((layer_name, layer_img))
             else:
                 channel_names.append(layer_name)
-                channel_images.append(layer_img.astype(np.float32))
+                for m in methods:
+                    channel_images_by_m[m].append(layer_images[m].astype(np.float32))
 
     # 4. Handle TCSPC data (FLIM)
     _progress(3, 5, "Processing TCSPC data...")
@@ -793,7 +832,10 @@ def import_dataset(
                     )
                 else:
                     stitched_intensity = next(iter(intensity_tiles.values()))
-                channel_images.append(stitched_intensity.astype(np.float32))
+                # A .bin channel has no Z axis: every projection gets the
+                # same image, and it stays out of the z-series (KTD3).
+                for m in methods:
+                    channel_images_by_m[m].append(stitched_intensity.astype(np.float32))
                 channel_names.append(ch_name)
 
             # Store info for deferred decay write (tile-by-tile to HDF5).
@@ -833,9 +875,11 @@ def import_dataset(
     # global bin step (and the floor-division for native_shape) must be
     # skipped to avoid double-binning.
     if creation_bin > 1 and pre_bin_shape is not None and not do_register:
-        channel_images = [
-            sum_bin_2d(arr, creation_bin) for arr in channel_images
-        ]
+        channel_images_by_m = {
+            m: [sum_bin_2d(arr, creation_bin) for arr in images]
+            for m, images in channel_images_by_m.items()
+        }
+        channel_images = channel_images_by_m[primary]
         label_layers = [
             (name, mode_labels(arr.astype(np.int32, copy=False), creation_bin))
             for name, arr in label_layers
@@ -916,6 +960,19 @@ def import_dataset(
             scaled = float(first_px) * max(1, int(creation_bin))
             all_metadata["pixel_size_um"] = scaled
 
+    # z-spacing (KTD8): the first z-plane file's ImageJ spacing, else the
+    # user's value; recorded only for data with a Z axis.
+    if has_z:
+        z_spacing = None
+        if intensity_files:
+            from percell4.adapters.readers import read_tiff_metadata
+
+            z_spacing = read_tiff_metadata(intensity_files[0].path).get("z_spacing_um")
+        if z_spacing is None and z_step_um is not None and z_step_um > 0:
+            z_spacing = float(z_step_um)
+        if z_spacing is not None:
+            all_metadata["z_spacing_um"] = float(z_spacing)
+
     if metadata:
         all_metadata.update(metadata)
 
@@ -947,19 +1004,26 @@ def import_dataset(
     # is already (T, H, W); single-channel writes (T, H, W) and multi-channel
     # stacks on axis=1 to (T, C, H, W). Without a time axis the layout is the
     # historical (H, W) / (C, H, W).
+    # Data with a Z axis writes one named projection per kept method; data
+    # without one writes /intensity exactly as before.
     if channel_images:
-        time_lapse = n_timepoints > 1
-        if len(channel_images) == 1:
-            dims = ["T", "H", "W"] if time_lapse else ["H", "W"]
-            store.write_array("intensity", channel_images[0], attrs={"dims": dims})
-        elif time_lapse:
-            intensity = np.stack(channel_images, axis=1)  # (T, C, H, W)
-            dims = ["T", "C", "H", "W"]
-            store.write_array("intensity", intensity, attrs={"dims": dims})
-        else:
-            intensity = assemble_channels(channel_images)
-            dims = ["C", "H", "W"]
-            store.write_array("intensity", intensity, attrs={"dims": dims})
+        for m in projection_methods:
+            intensity, dims = _stack_intensity(channel_images_by_m[m], n_timepoints)
+            if named:
+                store.write_projection(projection_for_method(m), intensity, dims)
+            else:
+                store.write_array("intensity", intensity, attrs={"dims": dims})
+
+    if keep_zseries and zseries_sources:
+        geometry = None
+        if do_register:
+            geometry = {
+                "offsets": stitch_offsets,
+                "canvas": stitch_canvas,
+                "disconnected": stitch_disconnected,
+                "fusion": intensity_fusion,
+            }
+        _write_token_zseries(store, zseries_sources, tile_config, creation_bin, geometry)
 
     # Write segmentation label layers
     for name, array in label_layers:
@@ -1021,10 +1085,14 @@ def import_dataset(
         # Final consistency lock: the stored /intensity canvas must equal the
         # registered canvas the offsets were placed against, before committing.
         # Data invariant → raise (not assert), so it survives ``python -O``.
-        stored_intensity = store.read_array("intensity")
-        if tuple(stored_intensity.shape[-2:]) != tuple(stitch_canvas):
+        stored_hw = (
+            store.array_shape("intensity")[-2:]
+            if store.array_exists("intensity")
+            else store.zseries_shape()[-2:]
+        )
+        if tuple(stored_hw) != tuple(stitch_canvas):
             raise RegistrationError(
-                f"stored /intensity (H, W) {tuple(stored_intensity.shape[-2:])} "
+                f"stored /intensity (H, W) {tuple(stored_hw)} "
                 f"!= registered canvas {tuple(stitch_canvas)}"
             )
 
@@ -1143,7 +1211,13 @@ def import_infile_dataset(
         "n_timepoints": n_t,
         "native_shape": (height, width),
     }
-    if len(choice.projections) == 1:
+    # A source with no Z axis has nothing to project or keep: it imports into
+    # /intensity as before, and the storage choice does not apply (R4).
+    has_z = n_z > 1
+    if not has_z:
+        choice = StorageChoice.from_z_method(z_method)
+        all_metadata["z_projection"] = z_method
+    elif len(choice.projections) == 1:
         all_metadata["z_projection"] = method_for_projection(choice.projections[0])
     if series.physical_x_um is not None and series.physical_x_um > 0:
         all_metadata["pixel_size_um"] = float(series.physical_x_um) * int(creation_bin)
@@ -1160,7 +1234,9 @@ def import_infile_dataset(
                 shape = ((n_t,) if n_t > 1 else ()) + (len(channels), n_z, height, width)
                 zseries = stack.begin_zseries(shape, names)
             projections = {
-                name: stack.begin_projection(name, n_t, len(channels), (height, width))
+                name: stack.begin_projection(
+                    name if has_z else None, n_t, len(channels), (height, width)
+                )
                 for name in choice.projections
             }
             accumulator = _StackProjector(choice.projections)
@@ -1276,6 +1352,77 @@ def _write_atomically(output_h5: Path, build: Callable[[DatasetStore], Any]) -> 
         raise
 
 
+def _stack_intensity(
+    channel_images: list[np.ndarray], n_timepoints: int
+) -> tuple[np.ndarray, list[str]]:
+    """Stack per-channel images into the intensity layout and its dims.
+
+    With a time axis (n_timepoints > 1) each channel image is already
+    (T, H, W): one channel stays (T, H, W), several stack on axis 1 to
+    (T, C, H, W). Without one the layout is the historical (H, W) / (C, H, W).
+    """
+    time_lapse = n_timepoints > 1
+    if len(channel_images) == 1:
+        return channel_images[0], (["T", "H", "W"] if time_lapse else ["H", "W"])
+    if time_lapse:
+        return np.stack(channel_images, axis=1), ["T", "C", "H", "W"]
+    return assemble_channels(channel_images), ["C", "H", "W"]
+
+
+def _write_token_zseries(
+    store: DatasetStore,
+    sources: list[tuple[str, list[list]]],
+    tile_config: TileConfig | None,
+    creation_bin: int,
+    geometry: dict[str, Any] | None,
+) -> None:
+    """Write the z-series of a token import, one stitched plane at a time.
+
+    ``sources`` lists each channel with a Z axis and its files per
+    timepoint. Each z-plane's tiles are placed exactly as the projection's
+    were: on the grid (then the plane is binned), or at the registered
+    offsets in ``geometry`` (tiles binned first, as registration did). Every
+    channel and timepoint must have the same number of z-planes.
+    """
+    from percell4.domain.io.assembler import assemble_tiles_with_offsets
+
+    per_source = [(name, [_z_tile_files(group) for group in tps]) for name, tps in sources]
+    z_counts = {len(zs) for _, tps in per_source for zs in tps}
+    if len(z_counts) != 1:
+        raise SourceShapeMismatchError(
+            f"Channels or timepoints have different z-plane counts {sorted(z_counts)}; "
+            "a z-series needs the same number of z-planes everywhere."
+        )
+    n_z = z_counts.pop()
+    n_t = len(per_source[0][1])
+    height, width = store.metadata["native_shape"]
+    shape = ((n_t,) if n_t > 1 else ()) + (len(per_source), n_z, int(height), int(width))
+    with store.open_stack_writer() as stack:
+        zseries = stack.begin_zseries(shape, [name for name, _ in per_source])
+        for c, (_name, tps) in enumerate(per_source):
+            for t, zs in enumerate(tps):
+                for z, tile_files in enumerate(zs):
+                    tiles = {
+                        i: read_tiff(str(f.path))["array"].astype(np.float32)
+                        for i, f in tile_files.items()
+                    }
+                    if geometry is not None:
+                        if creation_bin > 1:
+                            tiles = {i: sum_bin_2d(a, creation_bin) for i, a in tiles.items()}
+                        plane = assemble_tiles_with_offsets(
+                            tiles,
+                            geometry["offsets"],
+                            geometry["canvas"],
+                            disconnected=geometry["disconnected"],
+                            fusion_method=geometry["fusion"],
+                        )
+                    else:
+                        plane = _stitch_tile_arrays(tiles, tile_config)
+                        if creation_bin > 1:
+                            plane = sum_bin_2d(plane, creation_bin)
+                    zseries.write_plane(t, c, z, plane)
+
+
 def _group_by_channel(result: ScanResult) -> dict[str, list]:
     """Group discovered files by channel token."""
     groups: dict[str, list] = defaultdict(list)
@@ -1305,6 +1452,37 @@ def _group_by_timepoint(files: list) -> dict[str, list]:
         tp = f.tokens.get("timepoint", "")
         groups[tp].append(f)
     return dict(groups)
+
+
+def _assemble_planes(
+    files: list,
+    tile_config: TileConfig | None,
+    methods: tuple[str | None, ...],
+    tile_sinks: dict[str | None, dict[int, np.ndarray]] | None = None,
+) -> dict[str | None, np.ndarray]:
+    """:func:`_assemble_plane` for several z methods at once.
+
+    Each tile's z-slices are read once and projected by every method in
+    ``methods``. Returns ``{method: plane}``; without a z-series every method
+    maps to the same loaded plane. ``tile_sinks`` maps a method to its sink.
+    """
+    sinks = tile_sinks or {}
+    z_groups = _group_by_z(files)
+    if len(z_groups) > 1 and methods[0] is not None:
+        projected = _project_tiles_over_z_multi(files, methods)
+        return {
+            m: _stitch_tile_arrays(projected[m], tile_config, tile_sink=sinks.get(m))
+            for m in methods
+        }
+    all_files = []
+    for z_key in sorted(z_groups.keys()):
+        all_files.extend(z_groups[z_key])
+    first_sink = sinks.get(methods[0])
+    plane = _load_and_stitch(all_files, tile_config, tile_sink=first_sink)
+    for m in methods[1:]:
+        if sinks.get(m) is not None and first_sink is not None:
+            sinks[m].update(first_sink)
+    return {m: plane for m in methods}
 
 
 def _assemble_plane(
@@ -1341,6 +1519,37 @@ def _assemble_plane(
     for z_key in sorted(z_groups.keys()):
         all_files.extend(z_groups[z_key])
     return _load_and_stitch(all_files, tile_config, tile_sink=tile_sink)
+
+
+def _project_tiles_over_z_multi(
+    files: list, methods: tuple[str, ...]
+) -> dict[str, dict[int, np.ndarray]]:
+    """:func:`_project_tiles_over_z` for several methods, reading each file once."""
+    tile_groups: dict[int, list] = defaultdict(list)
+    for f in files:
+        tile_groups[int(f.tokens.get("tile", "0"))].append(f)
+    projected: dict[str, dict[int, np.ndarray]] = {m: {} for m in methods}
+    for tile_idx, tile_files in tile_groups.items():
+        z_slices = [read_tiff(str(f.path))["array"] for f in tile_files]
+        for m in methods:
+            projected[m][tile_idx] = project_z(z_slices, method=m)
+    return projected
+
+
+def _z_tile_files(files: list) -> list[dict[int, Any]]:
+    """``files`` of one channel and timepoint, as one ``{tile: file}`` per z,
+    in numeric z order."""
+    by_z = _group_by_z(files)
+    out = []
+    for z_key in ordered_z_tokens(by_z):
+        tiles: dict[int, Any] = {}
+        for f in by_z[z_key]:
+            tiles[int(f.tokens.get("tile", "0"))] = f
+        if tiles:
+            base = min(tiles)
+            tiles = {k - base: v for k, v in tiles.items()}
+        out.append(tiles)
+    return out
 
 
 def _project_tiles_over_z(

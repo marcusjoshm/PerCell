@@ -246,19 +246,23 @@ class _StackWriter:
         return _ZSeriesWriter(ds)
 
     def begin_projection(
-        self, name: str, n_t: int, n_c: int, hw: tuple[int, int]
+        self, name: str | None, n_t: int, n_c: int, hw: tuple[int, int]
     ) -> _ProjectionWriter:
-        """Pre-allocate the named projection for ``n_t`` x ``n_c`` planes."""
-        if name not in PROJECTION_NAMES:
+        """Pre-allocate the named projection for ``n_t`` x ``n_c`` planes.
+
+        ``name`` ``None`` pre-allocates the unnamed ``/intensity`` instead,
+        for data with no Z axis, which has no projection (R4).
+        """
+        if name is not None and name not in PROJECTION_NAMES:
             raise ValueError(
                 f"unknown projection {name!r}, expected one of {PROJECTION_NAMES}"
             )
         f = self._f
-        path = f"{PROJECTIONS_GROUP}/{name}"
+        path = INTENSITY_PATH if name is None else f"{PROJECTIONS_GROUP}/{name}"
         if path in f:
             del f[path]
         h, w = int(hw[0]), int(hw[1])
-        self._store._check_xy(f, (h, w), f"The {name} projection")
+        self._store._check_xy(f, (h, w), f"The {name or 'intensity'} image")
         dims = projection_layout(n_t, n_c)
         shape = tuple(
             {"T": n_t, "C": n_c, "H": h, "W": w}[d] for d in dims
