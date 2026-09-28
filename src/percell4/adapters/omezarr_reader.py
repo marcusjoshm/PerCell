@@ -31,7 +31,7 @@ import numpy as np
 from percell4.adapters.bioformats_host import project_planes
 from percell4.domain.errors import OmeZarrReadError
 from percell4.domain.io.infile import FileProbe, ImportSource
-from percell4.domain.io.omezarr import ZarrArraySpec, parse_store, series_array
+from percell4.domain.io.omezarr import ZarrArraySpec, ZarrSeries, parse_store, series_array
 from percell4.ports.image_reader import (
     IsCancelled,
     OnFile,
@@ -88,11 +88,15 @@ def store_fingerprint(root: str | Path) -> tuple[int, int]:
     does not parse falls back to the root directory's stat.
     """
     store = _Store(Path(root))
-    parsed = parse_store(store.read_json, store.read_text)
+    return _fingerprint(store, parse_store(store.read_json, store.read_text).series)
+
+
+def _fingerprint(store: _Store, series: Sequence[ZarrSeries]) -> tuple[int, int]:
+    """:func:`store_fingerprint` for a store whose series are already parsed."""
     stats = []
-    for series in parsed.series:
+    for s in series:
         try:
-            stats.append(store._path(f"{series.array.path}/.zarray").stat())
+            stats.append(store._path(f"{s.array.path}/.zarray").stat())
         except OSError:
             stats = []
             break
@@ -265,7 +269,7 @@ class OmeZarrReader:
         if parsed.error:
             return FileProbe(path=path, format_name=FORMAT_NAME, error=parsed.error)
         try:
-            size, mtime = store_fingerprint(path)
+            size, mtime = _fingerprint(store, parsed.series)
         except OSError as exc:
             return FileProbe(path=path, format_name=FORMAT_NAME, error=f"unreadable: {exc}")
         return FileProbe(

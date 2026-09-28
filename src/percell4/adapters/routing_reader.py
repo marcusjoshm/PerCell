@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator, Sequence
 from itertools import groupby
 from pathlib import Path
 
-from percell4.adapters.omezarr_reader import OmeZarrReader
+from percell4.adapters.omezarr_reader import OmeZarrReader, _never_cancelled
 from percell4.domain.io.infile import FileProbe, ImportSource, is_zarr_path
 from percell4.ports.image_reader import (
     ImageReader,
@@ -32,10 +32,6 @@ def _bioformats_reader() -> ImageReader:
     from percell4.adapters.bioformats_reader import BioformatsReader
 
     return BioformatsReader()
-
-
-def _never_cancelled() -> bool:
-    return False
 
 
 class RoutingReader:
