@@ -32,7 +32,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from percell4.domain.io.infile import ImportScheme, StageOneResult
+from percell4.domain.io.infile import ImportScheme, StageOneResult, is_zarr_path
 from percell4.domain.io.models import (
     CompressConfig,
     DatasetGuiState,
@@ -1050,7 +1050,10 @@ class CompressDialog(QDialog):
                 (e.path.name, e.reason) for e in stage.excluded
             ]
 
-        if not self._java_ready() and not self._java_setup(self):
+        # OME-Zarr stores are read natively; only other in-file formats need
+        # Java and Bio-Formats.
+        needs_java = any(not is_zarr_path(p) for p in stage.candidates)
+        if needs_java and not self._java_ready() and not self._java_setup(self):
             self._review.set_notes(notes("needs Java"))
             self._update_compress_button()
             return

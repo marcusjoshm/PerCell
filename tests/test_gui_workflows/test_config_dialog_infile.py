@@ -87,3 +87,27 @@ def test_infile_pending_plan_carries_the_storage_choice(tmp_path):
     )
     (pending,) = cdlg._infile_pending_datasets(no_choice)
     assert "storage" not in pending.compress_plan
+
+
+def test_java_preflight_passes_for_zarr_only_entries(monkeypatch, tmp_path):
+    scheme = ImportScheme(sources=(
+        _source(tmp_path / "a.zarr", name="a"),
+        _source(tmp_path / "b.ome.zarr", name="b"),
+    ))
+    cfg = SimpleNamespace(infile_scheme=scheme, output_dir=None, creation_bin=1)
+    pending = cdlg._infile_pending_datasets(cfg)
+    monkeypatch.setattr(cdlg, "_java_problem", lambda: "No working Java runtime was found.")
+
+    assert cdlg._infile_preflight(pending) is None
+
+
+def test_java_preflight_still_blocks_a_mix_with_a_bioformats_file(monkeypatch, tmp_path):
+    scheme = ImportScheme(sources=(
+        _source(tmp_path / "a.zarr", name="a"),
+        _source(tmp_path / "f.czi", name="f"),
+    ))
+    cfg = SimpleNamespace(infile_scheme=scheme, output_dir=None, creation_bin=1)
+    pending = cdlg._infile_pending_datasets(cfg)
+    monkeypatch.setattr(cdlg, "_java_problem", lambda: "No working Java runtime was found.")
+
+    assert cdlg._infile_preflight(pending) is not None

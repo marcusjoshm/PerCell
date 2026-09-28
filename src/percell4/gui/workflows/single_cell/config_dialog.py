@@ -343,9 +343,16 @@ def _java_problem() -> str | None:
 
 
 def _infile_preflight(pending: list[Any]) -> str | None:
-    """A start-blocking message when in-file entries exist but Java is missing."""
-    if not any((getattr(pd, "compress_plan", None) or {}).get("infile_source")
-               for pd in pending):
+    """A start-blocking message when Bio-Formats entries exist but Java is missing.
+
+    OME-Zarr sources are read natively and never need Java.
+    """
+    from percell4.domain.io.infile import is_zarr_path
+
+    sources = [
+        (getattr(pd, "compress_plan", None) or {}).get("infile_source") for pd in pending
+    ]
+    if not any(src and not is_zarr_path(Path(src["path"])) for src in sources):
         return None
     problem = _java_problem()
     if problem is None:

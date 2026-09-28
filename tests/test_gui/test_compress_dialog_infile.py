@@ -305,3 +305,82 @@ def test_run_infile_import_writes_each_source_and_cancel_keeps_earlier_ones(
     assert not list(outdir.glob("*.tmp"))
     assert "cancelled" in Host.message
     assert DatasetStore(outdir / "s0.h5").read_array("intensity").shape == (2, 8, 8)
+
+
+# ── OME-Zarr stores need no Java ──────────────────────────────────────
+
+
+def _zarr_store(path: Path, seed: int = 0) -> Path:
+    from tests.fakes.omezarr_fixture import write_store
+
+    data = np.random.default_rng(seed).integers(0, 900, (1, 2, 3, 8, 8)).astype(">u2")
+    return write_store(path, [data], levels=2, channel_names=[("DAPI", "GFP")])
+
+
+def _zarr_reader():
+    from percell4.adapters.routing_reader import RoutingReader
+
+    return RoutingReader(bioformats_factory=_no_reader)
+
+
+def _refuse_java_setup(_parent):
+    raise AssertionError("a Zarr-only selection must not ask for Java")
+
+
+def test_zarr_folder_scans_without_java(tmp_path, make_dialog):
+    """Covers AE3: two stores and a sidecar, no Java, no prompt."""
+    _zarr_store(tmp_path / "a.zarr", 1)
+    _zarr_store(tmp_path / "b.zarr", 2)
+    (tmp_path / "._a.zarr").write_bytes(b"x")
+    dlg = make_dialog(java_ready=False)
+    dlg._java_setup = _refuse_java_setup
+    dlg._reader_factory = _zarr_reader
+
+    _select_dir(dlg, tmp_path)
+
+    assert dlg._discovery_combo.currentIndex() == cd._INFILE_INDEX
+    assert dlg._review.row_count() == 2
+    assert [s.path.name for s in dlg._review.importable_sources()] == ["a.zarr", "b.zarr"]
+    assert dlg._btn_compress.isEnabled()
+
+
+def test_picking_the_store_folder_itself_gives_one_row(tmp_path, make_dialog):
+    store = _zarr_store(tmp_path / "cells.ome.zarr")
+    dlg = make_dialog(java_ready=False)
+    dlg._java_setup = _refuse_java_setup
+    dlg._reader_factory = _zarr_reader
+
+    _select_dir(dlg, store)
+
+    (source,) = dlg._review.importable_sources()
+    assert source.output_name == "cells"
+    assert source.series.channel_names == ("DAPI", "GFP")
+
+
+def test_zarr_plus_a_bioformats_file_still_asks_for_java(tmp_path, make_dialog):
+    _zarr_store(tmp_path / "a.zarr")
+    (tmp_path / "b.czi").write_bytes(b"x")
+    asked = []
+    dlg = make_dialog(java_ready=False)
+    dlg._java_setup = lambda _parent: asked.append(1) or False
+
+    _select_dir(dlg, tmp_path)
+
+    assert asked == [1]
+    assert dlg._review.status_text(0) == "needs Java"
+
+
+def test_zarr_v3_store_shows_its_reason(tmp_path, make_dialog):
+    v3 = tmp_path / "new.zarr"
+    v3.mkdir()
+    (v3 / "zarr.json").write_text('{"zarr_format": 3, "node_type": "group"}')
+    _zarr_store(tmp_path / "old.zarr")
+    dlg = make_dialog(java_ready=False)
+    dlg._java_setup = _refuse_java_setup
+    dlg._reader_factory = _zarr_reader
+
+    _select_dir(dlg, tmp_path)
+
+    reasons = {e.path.name: e.reason for e in dlg._review.scheme().excluded}
+    assert "Zarr v3" in reasons["new.zarr"]
+    assert [s.path.name for s in dlg._review.importable_sources()] == ["old.zarr"]
