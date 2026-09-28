@@ -10,6 +10,19 @@ the README for the current list.
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-09-28
+
+### Fixed
+
+- **Batch export no longer fails when some datasets have edge-touching cells and
+  others do not.** With edge cells included as a size-normalized cohort, a
+  dataset that added the synthetic edge row stored `label` and `cell_id` as
+  64-bit integers while a dataset with no edge cells kept them 32-bit. The final
+  export then stopped with `Field label has incompatible types: int32 vs int64`
+  after every dataset had measured successfully. Both columns now keep their
+  original type, and the export widens any column whose type still differs
+  between datasets instead of failing the whole run.
+
 ## [0.4.1] — 2026-09-11
 
 ### Fixed
