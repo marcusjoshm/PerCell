@@ -324,3 +324,30 @@ def test_idr0168_example_probes_and_reads_one_plane_per_channel() -> None:
         assert plane.shape == (2048, 2048)
         assert plane.dtype == np.dtype("uint16")
         assert plane.min() < plane.max()
+
+
+@pytest.mark.parametrize("codec", ["zlib", "zstd", "none"])
+def test_synthetic_codecs_round_trip(tmp_path, codec: str) -> None:
+    data = _tczyx(14, (1, 1, 2, 10, 9))
+    root = write_store(
+        tmp_path / f"{codec}.zarr", [data], chunks=(1, 1, 1, 4, 4), codec=codec, levels=1
+    )
+    planes = _planes(OmeZarrReader(), _source(root))
+    for z in range(2):
+        np.testing.assert_array_equal(planes[(0, 0, z)], data[0, 0, z])
+
+
+def test_read_projected_ends_quietly_when_cancelled_before_a_stack(tmp_path) -> None:
+    """A cancel landing in on_plane ends the iterator; it never raises."""
+    data = _tczyx(15, (1, 2, 3, 8, 8))
+    root = write_store(tmp_path / "c.zarr", [data], levels=1)
+    flag: list[bool] = []
+    out = list(
+        OmeZarrReader().read_projected(
+            _source(root),
+            "mip",
+            on_plane=lambda t, c: flag.append(True),
+            is_cancelled=lambda: bool(flag),
+        )
+    )
+    assert out == []

@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Iterator, Sequence
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -311,7 +312,10 @@ class OmeZarrReader:
         """
         cancelled = is_cancelled or _never_cancelled
         for t, c, stack in _stacks(source, on_plane, cancelled):
-            projected = project_planes(stack, z_method)
+            first = next(stack, None)
+            if first is None:  # cancelled before the stack's first plane
+                return
+            projected = project_planes(chain((first,), stack), z_method)
             if cancelled():
                 return
             yield t, c, projected
