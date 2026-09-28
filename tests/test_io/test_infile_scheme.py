@@ -16,6 +16,7 @@ import pytest
 import percell4.domain.io.infile as infile_mod
 from percell4.domain.io.infile import (
     AXIS_ASSUMED,
+    AXIS_NAMED,
     BIOFORMATS_SUFFIXES,
     REASON_BIN_IN_INFILE,
     REASON_MULTI_FILE,
@@ -31,6 +32,7 @@ from percell4.domain.io.infile import (
     apply_axis_map,
     confirm_source,
     dataset_stem,
+    is_zarr_path,
     preclassify,
     reassign_axes,
     suggest_scheme,
@@ -439,6 +441,43 @@ def test_dataset_stem_strips_compound_suffixes() -> None:
     assert dataset_stem(Path("/d/a.ome.tif")) == "a"
     assert dataset_stem(Path("/d/a.OME.TIFF")) == "a"
     assert dataset_stem(Path("/d/a.b.czi")) == "a.b"
+    assert dataset_stem(Path("/d/a.ome.zarr")) == "a"
+    assert dataset_stem(Path("/d/a.zarr")) == "a"
+
+
+def test_zarr_stores_are_in_file_candidates_without_a_header_read() -> None:
+    read = _plane_reader({})
+    result = preclassify(
+        [Path("/d/a.zarr"), Path("/d/b.OME.ZARR"), Path("/d/._a.zarr")], read
+    )
+    assert result.candidates == (Path("/d/a.zarr"), Path("/d/b.OME.ZARR"))
+    assert result.suggested_mode is DiscoveryMode.INFILE
+    assert read.calls == []
+
+
+def test_legacy_modes_exclude_zarr_stores_as_multi_plane() -> None:
+    result = preclassify([Path("/d/a.zarr")], _plane_reader({}), mode=DiscoveryMode.FLAT)
+    assert _reasons(result.excluded) == {"a.zarr": REASON_MULTI_PLANE}
+
+
+def test_is_zarr_path_matches_the_suffix_only() -> None:
+    assert is_zarr_path(Path("/d/x.zarr"))
+    assert is_zarr_path(Path("/d/x.ome.zarr"))
+    assert not is_zarr_path(Path("/d/.zarr"))
+    assert not is_zarr_path(Path("/d/x.zarr.tif"))
+
+
+@pytest.mark.parametrize(
+    ("t", "z", "pz"),
+    [
+        (1, 5, None),  # z axis with no or unknown unit
+        (3, 1, 0.2),  # time-lapse with a size-1 z that has a unit
+    ],
+)
+def test_named_axes_are_never_flagged_as_ambiguous(t: int, z: int, pz) -> None:
+    series = _series(t=t, z=z, pz=pz, axis_source=AXIS_NAMED)
+    (src,) = suggest_scheme([_probe("a.zarr", series)], "mip").sources
+    assert src.needs_confirmation == ""
 
 
 def test_module_imports_nothing_forbidden() -> None:

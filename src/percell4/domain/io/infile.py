@@ -43,6 +43,9 @@ Z_METHODS = ("mip", "mean", "sum")
 
 AXIS_METADATA = "metadata"
 AXIS_ASSUMED = "assumed"
+#: Every axis is named in the file's metadata (OME-Zarr), so Z and T are
+#: never confused and the Z-vs-T ambiguity flag does not apply.
+AXIS_NAMED = "named"
 
 REASON_MULTI_PLANE = "multi-plane file, import with In-file mode"
 REASON_SINGLE_PLANE = "single-plane series, import with Flat or Subdirectory mode"
@@ -55,6 +58,10 @@ REASON_POSSIBLE_T_AS_Z = "possible T stored as Z"
 REASON_ASSUMED_AXES = "axes assumed, no axis metadata in file (defaults to Z)"
 
 TIFF_SUFFIXES = frozenset({".tif", ".tiff", ".btf", ".tf2", ".tf8"})
+
+#: Suffixes of an OME-Zarr store. A store is a directory; PerCell reads it
+#: natively, without Bio-Formats or Java.
+ZARR_SUFFIXES = (".ome.zarr", ".zarr")
 FLIM_BIN_SUFFIX = ".bin"
 
 #: Suffixes that mark a multi-file dataset descriptor. Files sharing its stem
@@ -70,6 +77,7 @@ _COMPOUND_SUFFIXES = (
     ".ome.tf8",
     ".ome.btf",
     ".ome.xml",
+    ".ome.zarr",
 )
 
 #: Suffixes Bio-Formats 8.5.0 readers claim, lower case with the leading dot.
@@ -327,6 +335,11 @@ def is_bioformats_suffix(path: Path) -> bool:
     return _matching_suffix(path, BIOFORMATS_SUFFIXES) is not None
 
 
+def is_zarr_path(path: Path) -> bool:
+    """True if ``path`` names an OME-Zarr store by its suffix."""
+    return _matching_suffix(Path(path), ZARR_SUFFIXES) is not None
+
+
 def _is_tiff(path: Path) -> bool:
     return path.suffix.lower() in TIFF_SUFFIXES
 
@@ -425,6 +438,9 @@ def preclassify(
             if planes <= 1:
                 single_plane.append(p)
                 continue
+        elif is_zarr_path(p):
+            candidates.append(p)
+            continue
         elif not is_bioformats_suffix(p):
             always_excluded.append(ExcludedEntry(p, REASON_UNSUPPORTED))
             continue
@@ -468,6 +484,8 @@ def preclassify(
 
 def _ambiguity(series: SeriesProbe) -> str:
     """The KTD11 axis flag for one series, or ``""``."""
+    if series.axis_source == AXIS_NAMED:
+        return ""
     if series.axis_source == AXIS_ASSUMED:
         return REASON_ASSUMED_AXES
     if series.size_t > 1 and series.size_z == 1 and series.physical_z_um is not None:
