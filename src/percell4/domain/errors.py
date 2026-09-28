@@ -117,6 +117,16 @@ class BioformatsReadError(PercellError):
     """
 
 
+class OmeZarrReadError(PercellError):
+    """The native OME-Zarr reader could not read the pixel data of a store.
+
+    Raised while reading planes: a chunk that fails to decode or has the
+    wrong size, an unreadable chunk file, or metadata that no longer parses.
+    The message names the store. Probing never raises this; a store that
+    cannot be probed gets an error on its record.
+    """
+
+
 class ImportCancelledError(PercellError):
     """The user cancelled an in-file import before it finished.
 

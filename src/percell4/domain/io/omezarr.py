@@ -206,9 +206,7 @@ def _ome_xml(text: str | None) -> list[tuple[str, tuple[str, ...]]]:
     for image in root.iter():
         if _local(image.tag) != "Image":
             continue
-        channels = tuple(
-            ch.get("Name", "") for ch in image.iter() if _local(ch.tag) == "Channel"
-        )
+        channels = tuple(ch.get("Name", "") for ch in image.iter() if _local(ch.tag) == "Channel")
         images.append((image.get("Name", ""), channels))
     return images
 

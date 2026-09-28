@@ -148,7 +148,11 @@ def test_idr0168_metadata_gives_the_expected_series() -> None:
     (series,) = store.series
     probe = series.probe
     assert (probe.size_t, probe.size_c, probe.size_z, probe.size_y, probe.size_x) == (
-        1, 4, 49, 2048, 2048,
+        1,
+        4,
+        49,
+        2048,
+        2048,
     )
     assert probe.pixel_type == "uint16"
     assert probe.physical_x_um == pytest.approx(0.10049, abs=1e-5)
@@ -200,7 +204,11 @@ def test_cyx_store_has_single_t_and_z() -> None:
     store, _ = _parse(_single_image(_axes("c", "y", "x"), (3, 16, 32), [1.0, 0.2, 0.3]))
     probe = store.series[0].probe
     assert (probe.size_t, probe.size_c, probe.size_z, probe.size_y, probe.size_x) == (
-        1, 3, 1, 16, 32,
+        1,
+        3,
+        1,
+        16,
+        32,
     )
     assert probe.physical_z_um is None
     assert probe.physical_x_um == pytest.approx(0.3)
@@ -272,8 +280,14 @@ def test_bioformats2raw_without_a_series_list_counts_numbered_groups() -> None:
 
 @pytest.mark.parametrize(
     ("dtype", "pixel_type"),
-    [("|u1", "uint8"), ("<i2", "int16"), (">u4", "uint32"), ("<f4", "float"), (">f8", "double"),
-     ("|b1", "bit")],
+    [
+        ("|u1", "uint8"),
+        ("<i2", "int16"),
+        (">u4", "uint32"),
+        ("<f4", "float"),
+        (">f8", "double"),
+        ("|b1", "bit"),
+    ],
 )
 def test_supported_dtypes_map_to_reader_pixel_types(dtype: str, pixel_type: str) -> None:
     files = _single_image(_axes("y", "x"), (8, 8), [0.1, 0.1], dtype=dtype)
