@@ -84,6 +84,14 @@ the README for the current list.
 - **The broken "none" Z-projection choice is gone.** It raised inside the
   importer; every import now projects Z. A saved workflow plan that still
   asks for "none" fails with a message naming the field.
+- **Batch export no longer fails when some datasets have edge-touching cells and
+  others do not.** With edge cells included as a size-normalized cohort, a
+  dataset that added the synthetic edge row stored `label` and `cell_id` as
+  64-bit integers while a dataset with no edge cells kept them 32-bit. The final
+  export then stopped with `Field label has incompatible types: int32 vs int64`
+  after every dataset had measured successfully. Both columns now keep their
+  original type, and the export widens any column whose type still differs
+  between datasets instead of failing the whole run.
 
 - **The wavelet filter's Anscombe transform now follows the paper.** The
   LeeLab reference script clamps negative values *before* adding 3/8, which
