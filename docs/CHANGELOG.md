@@ -12,6 +12,15 @@ the README for the current list.
 
 ### Added
 
+- **OME-Zarr import (September 2026).** The In-file mode of *Import
+  Dataset*, single-cell workflows and `percell-import` accept OME-Zarr
+  stores (`.zarr` / `.ome.zarr` folders), such as the IDR publishes. PerCell
+  reads them itself, without Java or Bio-Formats, and imports the
+  full-resolution level with the same z-series and projection choices as
+  other in-file data; pixel sizes and z-spacing come from the store's
+  metadata. Supported: Zarr v2 with OME-NGFF 0.4, single images and
+  bioformats2raw multi-series stores. Zarr v3 / NGFF 0.5 stores, HCS plates
+  and remote stores are listed as excluded with a reason.
 - **Z-stacks: keep the full z-series, several projections, and view in 3D
   (September 2026).** Every import of z-stack data (the dialog's token and
   In-file modes, single-cell workflows and `percell-import --keep`) chooses

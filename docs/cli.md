@@ -29,7 +29,7 @@ Every tool also runs as a module (`python -m percell4.interfaces.cli.<module>`),
 | `percell-batch-threshold` | Run one thresholding round and write `/masks` + `/groups` back. | [↓](#percell-batch-threshold--headless-grouped-thresholding) |
 | `percell-batch-measure` | Measure existing masks and export a timestamped run folder of CSVs. | [↓](#percell-batch-measure--measure--particle-analysis--csv-export) |
 | `percell-inspect` | Print (or JSON-dump) each dataset's metadata, description, and layers. | [↓](#percell-inspect--print-dataset-metadata--layers) |
-| `percell-import` | Import multi-dimensional files (channels, z, time inside one file) through Bio-Formats. | [↓](#percell-import--import-multi-dimensional-files-through-bio-formats) |
+| `percell-import` | Import multi-dimensional files (channels, z, time inside one file) through Bio-Formats. | [↓](#percell-import--import-multi-dimensional-files-and-ome-zarr-stores) |
 | `percell-batch-add-projection` | Add a max, mean or sum projection computed from a dataset's stored z-series. | [↓](#percell-batch-add-projection--add-a-projection-from-the-stored-z-series) |
 | `percell-batch-validate-puncta` | **Dev harness.** Race puncta detectors against ground truth and lock a winner. | [↓](#percell-batch-validate-puncta--race-puncta-detectors-against-ground-truth) |
 | `percell-window-bakeoff` | **Dev harness.** Score auto-window-size finders against the SG-mask IoU oracle. | [↓](#percell-window-bakeoff--score-auto-window-size-finders-against-the-sg-mask-oracle) |
@@ -497,15 +497,17 @@ percell-inspect /scratch/dishes/ --json
 percell-inspect /scratch/dishes/ --grep PFA
 ```
 
-## `percell-import` — import multi-dimensional files through Bio-Formats
+## `percell-import` — import multi-dimensional files and OME-Zarr stores
 
-Imports microscopy files whose channels, z-series and time points live inside one file — ImageJ hyperstacks, OME-TIFF, and the other formats Bio-Formats reads — into `.h5` datasets. Each series of each file becomes one dataset. `--keep` chooses what each dataset stores from its z-stack: any of the `max`, `mean` and `sum` projections and/or the full z-series (`zseries`, float32, for 2D and 3D viewing). The default keeps one projection by `--z-method` (max). Analysis always runs on a projection, so a dataset kept with `zseries` alone is view-only until a projection is added. Files without a Z axis ignore `--keep` and import as before. The dataset stores the pixel size, the z-spacing and what it kept, which `percell-inspect` prints.
+Imports microscopy files whose channels, z-series and time points live inside one file — ImageJ hyperstacks, OME-TIFF, the other formats Bio-Formats reads, and OME-Zarr stores — into `.h5` datasets. Each series of each file becomes one dataset. `--keep` chooses what each dataset stores from its z-stack: any of the `max`, `mean` and `sum` projections and/or the full z-series (`zseries`, float32, for 2D and 3D viewing). The default keeps one projection by `--z-method` (max). Analysis always runs on a projection, so a dataset kept with `zseries` alone is view-only until a projection is added. Files without a Z axis ignore `--keep` and import as before. The dataset stores the pixel size, the z-spacing and what it kept, which `percell-inspect` prints.
 
-It scans the same way as the **In-file** mode of the import dialog: it reads file headers only, never pixel data, then probes the multi-plane files through Bio-Formats and prints the suggested scheme. Single-plane files are listed as excluded; import them with the dialog's Flat or Subdirectory mode. Unlike the batch tools above, its positional arguments are image files or folders, not `.h5` datasets.
+It scans the same way as the **In-file** mode of the import dialog: it reads file headers only, never pixel data, then probes the multi-plane files and prints the suggested scheme. Single-plane files are listed as excluded; import them with the dialog's Flat or Subdirectory mode. Unlike the batch tools above, its positional arguments are image files or folders, not `.h5` datasets.
 
 `--scan-only --scheme-out scheme.json` writes the suggested scheme to an editable JSON file; `--scheme scheme.json` imports exactly the sources it lists. A source whose axes are ambiguous (for example a stack with no z-spacing, which may be a time series) carries a `needs_confirmation` reason and blocks the import with exit `2` until the scheme confirms it — set `needs_confirmation` to `""`, or fix its `axis_map`.
 
-Bio-Formats needs Java. PerCell never downloads anything unless you pass `--provision-java`, which fetches a Java runtime and the Bio-Formats jar into PerCell's per-user cache (see [installation](installation.md)). Exit codes: `0` done, `1` Java unavailable, an import failed or an output exists without `--overwrite`, `2` usage error, nothing importable, or a source needs confirmation.
+**OME-Zarr.** A `.zarr` or `.ome.zarr` folder is one source, given directly or found inside a scanned folder. PerCell reads it natively, without Java or Bio-Formats, and imports only the full-resolution level; the smaller pyramid levels are ignored. It reads Zarr v2 stores with OME-NGFF 0.4 metadata: single images and bioformats2raw stores with several series (as the IDR publishes). Pixel sizes come from the store's scale metadata and are left unset when the unit is missing. The store's channel names are shown in the scan but not applied; channels are stored as `ch0`, `ch1`, …. Zarr v3 / OME-NGFF 0.5 stores, HCS plates, remote (`https://`, S3) stores, and arrays with Zarr filters or other codecs than Blosc, Zstd, zlib, gzip and LZ4 are listed as excluded with a reason.
+
+Every other in-file format goes through Bio-Formats, which needs Java. PerCell never downloads anything unless you pass `--provision-java`, which fetches a Java runtime and the Bio-Formats jar into PerCell's per-user cache (see [installation](installation.md)). Exit codes: `0` done, `1` Java unavailable, an import failed or an output exists without `--overwrite`, `2` usage error, nothing importable, or a source needs confirmation.
 
 ```bash
 percell-import [SOURCES ...] [--output-dir DIR] [--scan-only] [--scheme-out PATH]
@@ -515,7 +517,7 @@ percell-import [SOURCES ...] [--output-dir DIR] [--scan-only] [--scheme-out PATH
 
 | Option | Purpose |
 |---|---|
-| `sources` | Image files or folders to scan (folders are not recursive). Omit when using `--scheme`. |
+| `sources` | Image files, OME-Zarr stores or folders to scan (folders are not recursive; a `.zarr` folder is one store). Omit when using `--scheme`. |
 | `--output-dir DIR` | Folder for the `.h5` outputs, one per source, named after the file (and series). Required unless `--scan-only`. |
 | `--scan-only` | Print the suggested scheme and import nothing. |
 | `--scheme-out PATH` | Write the scheme to a JSON file you can edit and replay. |
@@ -538,6 +540,9 @@ percell-import --scheme scheme.json --output-dir /data/h5/
 
 # First run on a machine without Java
 percell-import stack_01.tif --output-dir /data/h5/ --provision-java
+
+# An OME-Zarr store from the IDR: no Java needed
+percell-import /data/idr0168/cell_01.zarr --output-dir /data/h5/ --keep max,zseries
 
 # Keep the full z-series for 3D viewing, plus max and mean projections
 percell-import stack_01.tif --output-dir /data/h5/ --keep max,mean,zseries

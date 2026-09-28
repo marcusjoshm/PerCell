@@ -299,7 +299,7 @@ pip install -e ".[ocr]"          # python deps for tools/png_to_csv/
 
 ### Bio-Formats (in-file import)
 
-The **In-file** mode of *Import Dataset* and the [`percell-import`](cli.md#percell-import--import-multi-dimensional-files-through-bio-formats) command read files whose channels, z-series and time points live inside one file. They use [Bio-Formats](https://www.openmicroscopy.org/bio-formats/), a Java library, which runs in a separate PerCell process.
+The **In-file** mode of *Import Dataset* and the [`percell-import`](cli.md#percell-import--import-multi-dimensional-files-and-ome-zarr-stores) command read files whose channels, z-series and time points live inside one file. They use [Bio-Formats](https://www.openmicroscopy.org/bio-formats/), a Java library, which runs in a separate PerCell process. OME-Zarr stores (`.zarr` folders) are the exception: PerCell reads them itself, so they need neither this extra nor Java.
 
 ```bash
 pip install -e ".[bioformats]"

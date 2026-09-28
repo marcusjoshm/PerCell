@@ -10,7 +10,12 @@ Output: dist/PerCell4/ (folder with PerCell4 executable)
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 
 def _bundle_version() -> str:
@@ -78,6 +83,10 @@ _hidden = collect_submodules("percell4") + [
     "click",
     "rich",
 ]
+# imagecodecs imports each codec's compiled extension on first use (the OME-Zarr
+# reader needs Blosc, Zstd, zlib and LZ4); collect them all with their libraries.
+_hidden += collect_submodules("imagecodecs")
+_binaries = collect_dynamic_libs("imagecodecs")
 
 # Collect data files for packages that ship resources
 _datas = (
@@ -98,7 +107,7 @@ _mac_icon = str(_res_dir / "percell4.icns")
 a = Analysis(
     [str(Path("src") / "percell4" / "app.py")],
     pathex=[src_dir],
-    binaries=[],
+    binaries=_binaries,
     datas=_datas,
     hiddenimports=_hidden,
     hookspath=[],
