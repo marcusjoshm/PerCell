@@ -155,3 +155,38 @@ def test_on_file_and_cancel_reach_the_reader(tmp_path):
 
     assert len(seen) == 2
     assert outcome.cancelled
+
+
+# ── OME-Zarr stores are one entry ─────────────────────────────────────
+
+
+def _zarr(path):
+    path.mkdir()
+    (path / ".zgroup").write_text('{"zarr_format": 2}')
+    (path / ".zattrs").write_text("{}")
+    (path / "0").mkdir()
+    return path
+
+
+def test_selected_zarr_store_is_one_entry(tmp_path):
+    store = _zarr(tmp_path / "s.zarr")
+    assert expand_selection([store]) == [store]
+
+
+def test_zarr_stores_inside_a_folder_stay_whole_and_sidecars_drop(tmp_path):
+    """Covers AE3 (selection side)."""
+    a = _zarr(tmp_path / "a.zarr")
+    b = _zarr(tmp_path / "b.ome.zarr")
+    (tmp_path / "._a.zarr").write_bytes(b"x")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert expand_selection([tmp_path]) == [a, b]
+
+
+def test_zarr_only_scan_probes_with_the_given_reader(tmp_path):
+    a = _zarr(tmp_path / "a.zarr")
+    stack = np.zeros((1, 2, 3, 8, 8), dtype=np.uint16)
+    reader = FakeImageReader([probe_for(a, stack, physical_z_um=0.5)])
+    outcome = scan_selection([tmp_path], reader_factory=lambda: reader)
+    assert outcome.stage_one.mode is DiscoveryMode.INFILE
+    assert [s.path for s in outcome.scheme.sources] == [a]

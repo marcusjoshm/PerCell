@@ -18,6 +18,7 @@ from pathlib import Path
 from percell4.domain.io.infile import (
     ImportScheme,
     StageOneResult,
+    is_zarr_path,
     preclassify,
     suggest_scheme,
 )
@@ -29,16 +30,19 @@ _SHARED_READER: ImageReader | None = None
 
 
 def shared_reader() -> ImageReader:
-    """The process's Bio-Formats reader, created on first use.
+    """The process's in-file reader, created on first use.
 
-    The dialog probes with it and the import loop reads with it, so one JVM
-    child serves the whole session. The reader closes its child at exit.
+    A :class:`~percell4.adapters.routing_reader.RoutingReader`: OME-Zarr
+    stores are read natively, everything else through Bio-Formats. The
+    dialog probes with it and the import loop reads with it, so one JVM
+    child, started only for a non-Zarr file, serves the whole session. The
+    Bio-Formats reader closes its child at exit.
     """
     global _SHARED_READER
     if _SHARED_READER is None:
-        from percell4.adapters.bioformats_reader import BioformatsReader
+        from percell4.adapters.routing_reader import RoutingReader
 
-        _SHARED_READER = BioformatsReader()
+        _SHARED_READER = RoutingReader()
     return _SHARED_READER
 
 
@@ -69,25 +73,33 @@ def tiff_plane_count(path: str | Path) -> int:
 
 
 def expand_selection(paths: Iterable[str | Path]) -> list[Path]:
-    """Files and directories -> a flat, ordered, sidecar-free file list.
+    """Files and directories -> a flat, ordered, sidecar-free source list.
 
     A directory contributes the files directly inside it (not recursive).
-    Explicit files keep the caller's order; duplicates collapse.
+    An OME-Zarr store (a ``.zarr`` directory) is one source, whether it was
+    selected itself or sits directly inside a selected directory; it is
+    never walked into. Explicit files keep the caller's order; duplicates
+    collapse.
     """
     out: list[Path] = []
     seen: set[Path] = set()
     for raw in paths:
         path = Path(raw)
-        found = (
-            [p for p in scan_files(path, "*") if p.is_file()]
-            if path.is_dir()
-            else drop_sidecars([path])
-        )
+        if path.is_dir() and not is_zarr_path(path):
+            found = [
+                p for p in scan_files(path, "*") if p.is_file() or _is_zarr_store(p)
+            ]
+        else:
+            found = drop_sidecars([path])
         for p in found:
             if p not in seen:
                 seen.add(p)
                 out.append(p)
     return out
+
+
+def _is_zarr_store(path: Path) -> bool:
+    return path.is_dir() and is_zarr_path(path)
 
 
 @dataclass(frozen=True)

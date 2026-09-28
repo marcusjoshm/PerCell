@@ -1202,11 +1202,11 @@ def import_infile_dataset(
             raise ImportSchemeError(f"output {output_h5} is outside the output folder {output_dir}")
 
     try:
-        st = path.stat()
+        size, mtime_ns = _source_fingerprint(path)
     except OSError as exc:
         raise ImportSchemeError(f"{path}: cannot read the source ({exc})") from exc
-    if (source.expected_size is not None and st.st_size != source.expected_size) or (
-        source.expected_mtime_ns is not None and st.st_mtime_ns != source.expected_mtime_ns
+    if (source.expected_size is not None and size != source.expected_size) or (
+        source.expected_mtime_ns is not None and mtime_ns != source.expected_mtime_ns
     ):
         raise ImportSchemeError(f"{path.name} changed since it was scanned; scan it again")
 
@@ -1307,6 +1307,22 @@ def import_infile_dataset(
             idx.create()
         idx.add_dataset(str(output_h5), status="complete")
     return len(channels)
+
+
+def _source_fingerprint(path: Path) -> tuple[int, int]:
+    """``(size, mtime_ns)`` the probe recorded for ``path``.
+
+    A file's own stat. An OME-Zarr store uses its level-0 array headers, so
+    files Finder or exFAT drives add to the store do not make it stale.
+    """
+    from percell4.domain.io.infile import is_zarr_path
+
+    if is_zarr_path(path) and path.is_dir():
+        from percell4.adapters.omezarr_reader import store_fingerprint
+
+        return store_fingerprint(path)
+    st = path.stat()
+    return int(st.st_size), int(st.st_mtime_ns)
 
 
 class _StackProjector:

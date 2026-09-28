@@ -153,3 +153,42 @@ def test_plan_saved_before_the_choice_replays_one_projection(tmp_path, fake_shar
     store = DatasetStore(updated.h5_path)
     assert store.list_projections() == ("mean",)
     assert not store.has_zseries()
+
+
+def test_zarr_entry_replays_through_the_shared_reader(tmp_path, monkeypatch):
+    """Workflow replay of an OME-Zarr source: routed to the native reader, no Java."""
+    from tests.fakes.omezarr_fixture import write_store
+
+    from percell4.adapters import infile_scan
+    from percell4.adapters.routing_reader import RoutingReader
+    from percell4.domain.io.infile import suggest_scheme
+
+    def refuse():
+        raise AssertionError("no Bio-Formats reader for a Zarr source")
+
+    monkeypatch.setattr(infile_scan, "_SHARED_READER", RoutingReader(bioformats_factory=refuse))
+    data = np.random.default_rng(5).integers(0, 700, (1, 2, 3, 8, 8)).astype(">u2")
+    root = write_store(tmp_path / "w.zarr", [data], levels=1)
+    reader = infile_scan.shared_reader()
+    source = suggest_scheme(reader.probe([root])).sources[0]
+    out = tmp_path / "out" / "w.h5"
+    entry = WorkflowDatasetEntry(
+        name="w",
+        source=DatasetSource.TIFF_PENDING,
+        h5_path=out,
+        channel_names=["ch0", "ch1"],
+        compress_plan={
+            "infile_source": scheme_json.source_to_dict(source),
+            "z_method": "mip",
+            "output_path": str(out),
+            "creation_bin": 1,
+        },
+    )
+
+    updated, failure, _ = compress_one(entry)
+
+    assert failure is None
+    np.testing.assert_array_equal(
+        DatasetStore(updated.h5_path).read_channel("intensity", 1),
+        data[0, 1].max(axis=0).astype(np.float32),
+    )

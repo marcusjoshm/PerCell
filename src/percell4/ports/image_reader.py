@@ -1,8 +1,10 @@
 """Port: metadata probe and projected-plane reads of in-file microscopy data.
 
 The in-file importer reads files whose channels, z-series, time points and
-series live inside one file. The implementation is Bio-Formats running in a
-separate process (``percell4.adapters.bioformats_reader``); tests use the
+series live inside one file. Implementations: Bio-Formats running in a
+separate process (``percell4.adapters.bioformats_reader``) and the native
+OME-Zarr reader (``percell4.adapters.omezarr_reader``), joined by
+``percell4.adapters.routing_reader``, which picks one per path. Tests use the
 in-memory fake in ``tests/fakes/fake_image_reader.py``.
 
 Both calls take an ``is_cancelled`` callback and a per-result callback. An
@@ -42,7 +44,9 @@ RawPlane = tuple[int, int, int, NDArray]
 class ImageReader(Protocol):
     """Reads in-file multi-dimensional microscopy data.
 
-    Implementation: :class:`percell4.adapters.bioformats_reader.BioformatsReader`.
+    Implementations: :class:`percell4.adapters.bioformats_reader.BioformatsReader`,
+    :class:`percell4.adapters.omezarr_reader.OmeZarrReader`, and
+    :class:`percell4.adapters.routing_reader.RoutingReader` over both.
     """
 
     def probe(

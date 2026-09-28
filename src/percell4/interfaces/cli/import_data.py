@@ -51,10 +51,13 @@ from percell4.domain.io.projections import StorageChoice
 
 
 def _make_reader():
-    """The real Bio-Formats reader. Seam for tests."""
-    from percell4.adapters.bioformats_reader import BioformatsReader
+    """The real in-file reader: OME-Zarr natively, the rest through Bio-Formats.
 
-    return BioformatsReader()
+    Seam for tests. Bio-Formats, and Java, start only for a non-Zarr source.
+    """
+    from percell4.adapters.routing_reader import RoutingReader
+
+    return RoutingReader()
 
 
 def _provision(**kwargs) -> None:

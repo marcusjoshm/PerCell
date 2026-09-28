@@ -441,3 +441,63 @@ def test_single_plane_source_imports_into_intensity_as_today(tmp_path):
     assert not store.has_zseries()
     np.testing.assert_array_equal(store.read_array("intensity"), stack[:, :, 0].astype(np.float32))
     assert store.metadata["z_projection"] == "mip"
+
+
+# ── OME-Zarr through the native reader ────────────────────────────────
+
+
+def _zarr_source(tmp_path, data):
+    from tests.fakes.omezarr_fixture import write_store
+
+    from percell4.adapters.omezarr_reader import OmeZarrReader
+    from percell4.domain.io.infile import suggest_scheme
+
+    root = write_store(
+        tmp_path / "s.zarr", [data], chunks=(1, 1, 1, 8, 8), levels=2,
+        scale=[1.0, 1.0, 0.4, 0.1, 0.1], channel_names=[("DAPI", "GFP")],
+    )
+    reader = OmeZarrReader()
+    (probe,) = reader.probe([root])
+    return suggest_scheme([probe]).sources[0], reader, root
+
+
+def test_zarr_store_imports_zseries_and_max_with_calibration(tmp_path):
+    """Covers AE2: level-0 values, ch0/ch1 names, µm calibration."""
+    from percell4.domain.io.projections import StorageChoice
+
+    data = _stack(c=2, z=3, y=20, x=12).astype(">u2")
+    source, reader, _root = _zarr_source(tmp_path, data)
+    out = tmp_path / "out" / "s.h5"
+
+    import_infile_dataset(
+        source, out, reader, storage=StorageChoice(projections=("max",), keep_zseries=True)
+    )
+
+    store = DatasetStore(out)
+    assert store.zseries_shape() == (2, 3, 20, 12)
+    assert store.metadata["channel_names"] == ["ch0", "ch1"]
+    assert store.metadata["pixel_size_um"] == pytest.approx(0.1)
+    assert store.metadata["z_spacing_um"] == pytest.approx(0.4)
+    for c in range(2):
+        for z in range(3):
+            np.testing.assert_array_equal(store.read_zseries_plane(0, c, z), data[0, c, z])
+        np.testing.assert_array_equal(
+            DatasetStore(out, projection="max").read_channel("intensity", c),
+            data[0, c].max(axis=0).astype(np.float32),
+        )
+
+
+def test_zarr_store_is_not_stale_after_a_finder_sidecar(tmp_path):
+    source, reader, root = _zarr_source(tmp_path, _stack(c=2, z=2, y=8, x=8).astype(">u2"))
+    (root / ".DS_Store").write_bytes(b"\0" * 128)
+    (root / "._0").write_bytes(b"\0" * 128)
+    import_infile_dataset(source, tmp_path / "o.h5", reader)
+    assert (tmp_path / "o.h5").exists()
+
+
+def test_zarr_store_with_a_rewritten_array_is_stale(tmp_path):
+    source, reader, root = _zarr_source(tmp_path, _stack(c=2, z=2, y=8, x=8).astype(">u2"))
+    header = root / "0" / "0" / ".zarray"
+    header.write_text(header.read_text() + "\n")
+    with pytest.raises(ImportSchemeError, match="changed since it was scanned"):
+        import_infile_dataset(source, tmp_path / "o.h5", reader)

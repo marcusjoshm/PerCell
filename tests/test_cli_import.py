@@ -260,3 +260,44 @@ def test_z_step_fills_in_a_missing_z_spacing(tmp_path, monkeypatch):
     rc = cli.main(["--scheme", str(scheme_path), "--output-dir", str(outdir), "--z-step", "0.3"])
     assert rc == 0
     assert DatasetStore(outdir / "c.h5").metadata["z_spacing_um"] == pytest.approx(0.3)
+
+
+# ── OME-Zarr: no Java, scan and scheme replay ─────────────────────────
+
+
+@pytest.fixture
+def no_bioformats(monkeypatch):
+    def refuse():
+        raise AssertionError("a Zarr-only run must not build the Bio-Formats reader")
+
+    monkeypatch.setattr("percell4.adapters.routing_reader._bioformats_reader", refuse)
+
+
+def _zarr_folder(tmp_path):
+    from tests.fakes.omezarr_fixture import write_store
+
+    data = np.random.default_rng(3).integers(0, 900, (1, 2, 3, 8, 8)).astype(">u2")
+    src = tmp_path / "raw"
+    src.mkdir()
+    write_store(src / "cells.zarr", [data], levels=2, scale=[1, 1, 0.3, 0.1, 0.1])
+    return src, data
+
+
+def test_zarr_folder_imports_without_java(tmp_path, no_bioformats):
+    src, data = _zarr_folder(tmp_path)
+    outdir = tmp_path / "out"
+    rc = cli.main([str(src), "--output-dir", str(outdir), "--keep", "max,zseries"])
+    assert rc == 0
+    store = DatasetStore(outdir / "cells.h5")
+    assert store.zseries_shape() == (2, 3, 8, 8)
+    np.testing.assert_array_equal(store.read_zseries_plane(0, 1, 2), data[0, 1, 2])
+
+
+def test_zarr_scheme_replays_through_the_zarr_reader(tmp_path, no_bioformats):
+    src, data = _zarr_folder(tmp_path)
+    scheme_path = tmp_path / "s.json"
+    assert cli.main([str(src), "--scan-only", "--scheme-out", str(scheme_path)]) == 0
+    outdir = tmp_path / "out"
+    assert cli.main(["--scheme", str(scheme_path), "--output-dir", str(outdir)]) == 0
+    got = DatasetStore(outdir / "cells.h5").read_array("projections/max")
+    np.testing.assert_array_equal(got, data[0].max(axis=1).astype(np.float32))
