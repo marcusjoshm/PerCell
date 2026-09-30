@@ -10,6 +10,15 @@ the README for the current list.
 
 ## [Unreleased]
 
+### Added
+
+- **Whole-field presets decapping-sensor-v7 and v8.** Both measure three
+  regions, each with its own mask: the condensate, a new optional
+  **intermediate_mask** and the dilute mask. A single mNG filter mask and
+  interaction mask apply to all three regions. v7 leaves Halo pixels outside the
+  interaction mask out of each mean; v8 counts them as zero. Results match the
+  mask-intensity-analysis CLI (commit 9f11fa1). Presets v2 to v6 are unchanged.
+
 ## [0.4.2] — 2026-09-28
 
 ### Fixed

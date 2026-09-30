@@ -4,9 +4,12 @@ Concrete per-analysis ``QDialog`` for the ``WholeFieldIntensity`` analysis,
 mirroring :class:`PerParticleDonutDialog`: required role combos, an
 optional-masks section, a parameter section with a preset combo + lock,
 requires-gating, and bg-value spins that enable only when their mode is
-``"manual"``. The four intermediate masks are plain optional combos; the
-``intermediate_assemblies`` checkbox is requires-gated on all four being
-mapped (the framework-consistent way to express "needs these masks").
+``"manual"``. The intermediate masks are plain optional combos; the
+``intermediate_assemblies`` checkbox is requires-gated on ``mng_mask`` +
+``interaction_mask`` and ``intermediate_master_mask`` on ``intermediate_mask``
+(the framework-consistent way to express "needs these masks"). The
+layout-specific masks (v4/v5 inner masks, v7/v8 ``intermediate_mask``) are
+enforced by the presets' required roles and the module's ``run()`` guards.
 Mutually-exclusive option combinations are enforced by the module's
 ``run()`` ValueError guards (the dialog's Start can still dispatch them; the
 batch runner reports the failed item).
@@ -76,7 +79,7 @@ _NO_PRESET = "No preset"
 # Optional mask/label roles shown as always-enabled combos.
 _OPTIONAL_ROLES = (
     "cp_mask", "mng_mask", "interaction_mask", "sir_mask",
-    "dcp2_mask_2", "interaction_mask_2",
+    "dcp2_mask_2", "interaction_mask_2", "intermediate_mask",
 )
 # bg-mode choice param -> the manual-value IntParam it gates.
 _BG_VALUE_PARAMS = {"mng_bg_mode": "mng_bg_value",
@@ -567,11 +570,16 @@ class WholeFieldIntensityDialog(QDialog):
         assert self._preset_combo is not None
         preset = self._preset_combo.currentText()
         if preset != _NO_PRESET:
-            for name, value in WholeFieldIntensity.presets.get(
-                preset, {}
-            ).items():
-                if name in self._param_setters:
-                    self._param_setters[name](value)
+            values = WholeFieldIntensity.presets.get(preset, {})
+            editable = set(WholeFieldIntensity.preset_editable_params)
+            for name, setter in self._param_setters.items():
+                if name in values:
+                    setter(values[name])
+                elif name not in editable:
+                    # A preset that omits a param runs it at its default
+                    # (e.g. v2..v6 predate intermediate_master_mask), so show
+                    # that rather than a value left over from another preset.
+                    setter(WholeFieldIntensity.parameters[name].default)
         self._refresh_state()
 
     # ── Run mechanics ───────────────────────────────────────────
