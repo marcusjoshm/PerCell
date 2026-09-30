@@ -27,6 +27,7 @@ Every batch operation is also available as a headless command-line tool.
 
 | | |
 |---|---|
+| [User manual](docs/manual/README.md) | Every window and control, step-by-step instructions, and quick guides |
 | [Installation](docs/installation.md) | Per-OS setup, optional extras, standalone bundles, troubleshooting |
 | [Workflow protocol](docs/workflow-protocol.md) | Step-by-step guide to the single-cell analysis workflow |
 | [Command-line tools](docs/cli.md) | All command-line tools and their options |
