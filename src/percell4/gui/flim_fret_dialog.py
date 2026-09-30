@@ -938,11 +938,7 @@ class _ConfigurePairDialog(QDialog):
         detach_window(self)
         center_on_screen(self)
 
-        self._single_cell = single_cell
         self._initial = initial
-        # Per-particle builds the donor reference from particles, so only the
-        # DA side asks for a segmentation.
-        self._donor_needs_segmentation = single_cell and not per_particle
 
         # Read live layer lists once.
         try:
@@ -980,7 +976,9 @@ class _ConfigurePairDialog(QDialog):
             self._donor_masks,
             self._donor_lifetimes,
             self._donor_labels,
-            with_segmentation=self._donor_needs_segmentation,
+            # Per-particle builds the donor reference from particles, so
+            # only the DA side asks for a segmentation.
+            with_segmentation=single_cell and not per_particle,
         )
         self._da_widgets = self._build_side(
             "Donor + Acceptor",
