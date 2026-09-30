@@ -843,6 +843,10 @@ class FlimFretPair:
                 raise ValueError(f"FLIM-FRET pair {self.name!r}: {field_name} must be non-empty")
 
 
+# Units for ``FlimFretConfig.min_particle_size``.
+FLIM_FRET_PARTICLE_SIZE_UNITS = ("px", "um2")
+
+
 @dataclass(frozen=True)
 class FlimFretConfig:
     """The FLIM-FRET workflow recipe. Frozen at Start.
@@ -852,11 +856,21 @@ class FlimFretConfig:
     segmentation fields. ``output_parent`` is the user-chosen parent folder;
     the dialog creates a timestamped run folder beneath it via
     ``workflows.artifacts.create_run_folder``.
+
+    ``per_particle`` switches to one row per donor+acceptor particle
+    (8-connected mask component) against a donor reference built as the mean
+    of the donor particle means. Particles smaller than ``min_particle_size``
+    (in ``min_particle_size_unit``: ``"px"`` or ``"um2"``) are dropped on both
+    sides. Combined with ``single_cell``, each particle is tagged with its
+    majority cell, so only ``da_segmentation`` is required.
     """
 
     pairs: list[FlimFretPair]
     single_cell: bool
     output_parent: Path
+    per_particle: bool = False
+    min_particle_size: float = 1.0
+    min_particle_size_unit: str = "px"
 
     def __post_init__(self) -> None:
         if not self.pairs:
@@ -877,7 +891,9 @@ class FlimFretConfig:
                     f"different .h5 files (both resolve to {pair.donor_h5})"
                 )
             if self.single_cell:
-                if not pair.donor_segmentation:
+                # Per-particle builds the donor reference from particles, so
+                # the donor segmentation is only needed for per-cell runs.
+                if not self.per_particle and not pair.donor_segmentation:
                     raise ValueError(
                         f"FLIM-FRET pair {pair.name!r}: donor_segmentation "
                         "is required when single_cell is True"
@@ -887,6 +903,16 @@ class FlimFretConfig:
                         f"FLIM-FRET pair {pair.name!r}: da_segmentation "
                         "is required when single_cell is True"
                     )
+        if self.min_particle_size_unit not in FLIM_FRET_PARTICLE_SIZE_UNITS:
+            raise ValueError(
+                f"min_particle_size_unit must be one of "
+                f"{FLIM_FRET_PARTICLE_SIZE_UNITS}, got "
+                f"{self.min_particle_size_unit!r}"
+            )
+        if not self.min_particle_size >= 0:
+            raise ValueError(
+                f"min_particle_size must be >= 0, got {self.min_particle_size!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -904,6 +930,9 @@ class FlimFretPairResult:
     n_pixels_donor: int
     n_cells_donor_reference: int
     n_da_cells_skipped: int
+    # Per-particle mode only (0 otherwise).
+    n_particles_donor_reference: int = 0
+    n_da_particles_skipped: int = 0
 
 
 @dataclass(frozen=True)

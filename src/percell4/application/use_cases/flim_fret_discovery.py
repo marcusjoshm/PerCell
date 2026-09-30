@@ -13,7 +13,9 @@ The qualification rule mirrors the user-chosen contract: a dataset is eligible
 only if it has at least one ``/masks/<name>`` ending in ``_mask``, one ending
 in ``_phasor``, and one channel name ending in ``_lifetime`` under
 ``/intensity``. Single-cell mode additionally requires at least one
-``/labels/<name>``. Time-lapse ``/intensity`` (4D ``(T, C, H, W)``) is
+``/labels/<name>``, except per-particle + single-cell, where only the DA side
+needs one (checked in Configure, since discovery cannot tell donor from DA).
+Time-lapse ``/intensity`` (4D ``(T, C, H, W)``) is
 explicitly out of scope and rejected at discovery.
 """
 
@@ -44,7 +46,7 @@ class DatasetCandidate:
 
 
 def discover_flim_fret_candidates(
-    source_folder: Path, *, single_cell: bool
+    source_folder: Path, *, single_cell: bool, per_particle: bool = False
 ) -> list[DatasetCandidate]:
     """Scan ``source_folder`` non-recursively for ``.h5`` / ``.hdf5`` files.
 
@@ -56,10 +58,11 @@ def discover_flim_fret_candidates(
     Results are sorted by path so dialog dropdowns are deterministic.
     """
     paths = scan_files(source_folder, "*.h5", "*.hdf5")
-    return [_evaluate_candidate(p, single_cell=single_cell) for p in paths]
+    require_labels = single_cell and not per_particle
+    return [_evaluate_candidate(p, require_labels=require_labels) for p in paths]
 
 
-def _evaluate_candidate(path: Path, *, single_cell: bool) -> DatasetCandidate:
+def _evaluate_candidate(path: Path, *, require_labels: bool) -> DatasetCandidate:
     reasons: list[str] = []
     try:
         store = DatasetStore(path)
@@ -76,7 +79,7 @@ def _evaluate_candidate(path: Path, *, single_cell: bool) -> DatasetCandidate:
         if _intensity_is_time_lapse(path):
             reasons.append("time-lapse /intensity unsupported")
 
-        if single_cell and not store.list_labels():
+        if require_labels and not store.list_labels():
             reasons.append("no /labels/* (required for single-cell)")
     except Exception as exc:  # noqa: BLE001 — discovery must not raise
         reasons.append(f"open failed: {exc}")

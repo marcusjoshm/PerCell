@@ -36,6 +36,7 @@ from qtpy.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -109,7 +110,7 @@ class _PairConfig:
         # Reset to True any time donor/DA dataset selection changes.
         self.configured: bool = False
 
-    def is_complete(self, *, single_cell: bool) -> bool:
+    def is_complete(self, *, single_cell: bool, per_particle: bool = False) -> bool:
         if not self.configured:
             return False
         required = [
@@ -121,7 +122,11 @@ class _PairConfig:
             self.da_lifetime,
         ]
         if single_cell:
-            required += [self.donor_segmentation, self.da_segmentation]
+            required.append(self.da_segmentation)
+            # Per-particle builds the donor reference from particles, so only
+            # the DA side needs a segmentation (for each particle's cell_id).
+            if not per_particle:
+                required.append(self.donor_segmentation)
         return all(required)
 
 
@@ -168,6 +173,9 @@ class FlimFretDialog(QDialog):
 
         # Widgets.
         self._single_cell_check: QCheckBox | None = None
+        self._per_particle_check: QCheckBox | None = None
+        self._min_particle_size_spin: QDoubleSpinBox | None = None
+        self._min_particle_size_unit_combo: QComboBox | None = None
         self._source_folder_edit: QLineEdit | None = None
         self._output_folder_edit: QLineEdit | None = None
         self._discovery_status_label: QLabel | None = None
@@ -231,6 +239,40 @@ class FlimFretDialog(QDialog):
         )
         self._single_cell_check.toggled.connect(self._on_single_cell_toggled)
         layout.addWidget(self._single_cell_check)
+
+        self._per_particle_check = QCheckBox("Per-particle analysis")
+        self._per_particle_check.setToolTip(
+            "Emit one CSV row per particle (8-connected blob) of the DA mask. "
+            "The donor reference is the mean of the donor-only particle means. "
+            "With single-cell on, each particle is tagged with its majority "
+            "cell and only the DA side needs a segmentation."
+        )
+        self._per_particle_check.toggled.connect(self._on_per_particle_toggled)
+        layout.addWidget(self._per_particle_check)
+
+        size_row = QHBoxLayout()
+        size_row.addWidget(QLabel("Minimum particle size:"))
+        self._min_particle_size_spin = QDoubleSpinBox()
+        self._min_particle_size_spin.setRange(0.0, 1_000_000.0)
+        self._min_particle_size_spin.setDecimals(3)
+        self._min_particle_size_spin.setValue(1.0)
+        self._min_particle_size_spin.setToolTip(
+            "Particles smaller than this are dropped on both the donor-only "
+            "and DA sides. Measured on the whole mask blob, before phasor "
+            "gating."
+        )
+        size_row.addWidget(self._min_particle_size_spin)
+        self._min_particle_size_unit_combo = QComboBox()
+        self._min_particle_size_unit_combo.addItem("px", "px")
+        self._min_particle_size_unit_combo.addItem("µm²", "um2")
+        self._min_particle_size_unit_combo.setToolTip(
+            "µm² needs a pixel size on every dataset; a pair without one "
+            "fails with a reason."
+        )
+        size_row.addWidget(self._min_particle_size_unit_combo)
+        size_row.addStretch()
+        layout.addLayout(size_row)
+        self._refresh_particle_size_enabled()
         return box
 
     def _build_section_folders(self) -> QGroupBox:
@@ -312,6 +354,20 @@ class FlimFretDialog(QDialog):
             self._single_cell_check and self._single_cell_check.isChecked()
         )
 
+    def _is_per_particle(self) -> bool:
+        return bool(
+            self._per_particle_check and self._per_particle_check.isChecked()
+        )
+
+    def _refresh_particle_size_enabled(self) -> None:
+        enabled = self._is_per_particle()
+        for widget in (
+            self._min_particle_size_spin,
+            self._min_particle_size_unit_combo,
+        ):
+            if widget is not None:
+                widget.setEnabled(enabled)
+
     def _eligible_paths(self) -> list[Path]:
         return [p for p, c in sorted(self._candidates.items()) if c.qualifies]
 
@@ -386,7 +442,9 @@ class FlimFretDialog(QDialog):
         else:
             try:
                 candidates = self._discovery(
-                    self._source_folder, single_cell=self._is_single_cell()
+                    self._source_folder,
+                    single_cell=self._is_single_cell(),
+                    per_particle=self._is_per_particle(),
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.exception("FLIM-FRET discovery failed")
@@ -431,6 +489,14 @@ class FlimFretDialog(QDialog):
         self._rediscover()
         # Configure state is preserved; per-pair "needs (re)configure" is
         # surfaced via _update_run_button + Configure button label below.
+        self._refresh_pair_table_button_labels()
+        self._update_run_button()
+
+    def _on_per_particle_toggled(self, _checked: bool) -> None:
+        self._refresh_particle_size_enabled()
+        # Discovery's /labels/* rule and the donor segmentation requirement
+        # both depend on per-particle mode.
+        self._rediscover()
         self._refresh_pair_table_button_labels()
         self._update_run_button()
 
@@ -544,7 +610,9 @@ class FlimFretDialog(QDialog):
             if not isinstance(btn, QPushButton):
                 continue
             cfg = self._pair_configs[r] if r < len(self._pair_configs) else None
-            if cfg is None or not cfg.is_complete(single_cell=single):
+            if cfg is None or not cfg.is_complete(
+                single_cell=single, per_particle=self._is_per_particle()
+            ):
                 btn.setText("Configure")
                 btn.setToolTip(
                     "Configure layer selections for this pair. "
@@ -595,6 +663,7 @@ class FlimFretDialog(QDialog):
             donor_path=Path(donor_path),
             da_path=Path(da_path),
             single_cell=self._is_single_cell(),
+            per_particle=self._is_per_particle(),
             initial=cfg,
         )
         if sub.exec_() == QDialog.Accepted:
@@ -631,6 +700,7 @@ class FlimFretDialog(QDialog):
             raise RuntimeError("Pick an output parent folder.")
 
         single = self._is_single_cell()
+        per_particle = self._is_per_particle()
         pairs: list[FlimFretPair] = []
         seen_names: set[str] = set()
         for r in range(self._pair_table.rowCount()):
@@ -652,7 +722,7 @@ class FlimFretDialog(QDialog):
                 raise RuntimeError(f"Pair {name!r}: pick donor and DA datasets.")
 
             cfg = self._pair_configs[r]
-            if not cfg.is_complete(single_cell=single):
+            if not cfg.is_complete(single_cell=single, per_particle=per_particle):
                 raise RuntimeError(f"Pair {name!r}: Configure is incomplete.")
 
             pairs.append(
@@ -666,13 +736,26 @@ class FlimFretDialog(QDialog):
                     da_mask=cfg.da_mask,
                     da_phasor=cfg.da_phasor,
                     da_lifetime=cfg.da_lifetime,
-                    donor_segmentation=cfg.donor_segmentation if single else None,
+                    donor_segmentation=(
+                        cfg.donor_segmentation
+                        if single and not per_particle
+                        else None
+                    ),
                     da_segmentation=cfg.da_segmentation if single else None,
                 )
             )
 
+        assert self._min_particle_size_spin is not None
+        assert self._min_particle_size_unit_combo is not None
         return FlimFretConfig(
-            pairs=pairs, single_cell=single, output_parent=Path(out_str)
+            pairs=pairs,
+            single_cell=single,
+            output_parent=Path(out_str),
+            per_particle=per_particle,
+            min_particle_size=float(self._min_particle_size_spin.value()),
+            min_particle_size_unit=str(
+                self._min_particle_size_unit_combo.currentData()
+            ),
         )
 
     # ── Start handler ────────────────────────────────────
@@ -735,7 +818,10 @@ class FlimFretDialog(QDialog):
         # Write the combined CSV via the atomic helper.
         csv_path = run_folder / "flim_fret_results.csv"
         rows = [row for result in report.results for row in result.rows]
-        df = pd.DataFrame(rows, columns=_CSV_COLUMNS)
+        columns = (
+            _PER_PARTICLE_CSV_COLUMNS if config.per_particle else _CSV_COLUMNS
+        )
+        df = pd.DataFrame(rows, columns=columns)
         try:
             write_atomic(
                 csv_path,
@@ -797,6 +883,25 @@ _CSV_COLUMNS = [
     "n_da_cells_skipped",
 ]
 
+# Per-particle mode: one row per DA particle. Whole-field and single-cell
+# runs keep _CSV_COLUMNS unchanged.
+_PER_PARTICLE_CSV_COLUMNS = [
+    "pair_name",
+    "donor_dataset",
+    "da_dataset",
+    "cell_id",
+    "particle_id",
+    "area_px",
+    "area_um2",
+    "donor_mean_lifetime",
+    "da_mean_lifetime",
+    "fret_efficiency",
+    "n_pixels_donor",
+    "n_pixels_da",
+    "n_particles_donor_reference",
+    "n_da_particles_skipped",
+]
+
 
 # ── Configure sub-dialog ───────────────────────────────────
 
@@ -806,10 +911,10 @@ class _ConfigurePairDialog(QDialog):
 
     Two columns (Donor / Donor+Acceptor). Each column has dropdowns for
     mask, phasor, and lifetime layers — plus segmentation when single-cell
-    mode is on. Dropdowns are unfiltered: the user can pick any
-    ``/masks/`` entry for both the mask and the phasor field; helper text
-    nudges toward the ``_mask`` / ``_phasor`` suffix convention but does
-    not enforce it.
+    mode is on (DA side only when per-particle mode is also on). Dropdowns
+    are unfiltered: the user can pick any ``/masks/`` entry for both the
+    mask and the phasor field; helper text nudges toward the ``_mask`` /
+    ``_phasor`` suffix convention but does not enforce it.
     """
 
     def __init__(
@@ -820,6 +925,7 @@ class _ConfigurePairDialog(QDialog):
         da_path: Path,
         single_cell: bool,
         initial: _PairConfig,
+        per_particle: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Configure pair: {donor_path.name} ↔ {da_path.name}")
@@ -834,6 +940,9 @@ class _ConfigurePairDialog(QDialog):
 
         self._single_cell = single_cell
         self._initial = initial
+        # Per-particle builds the donor reference from particles, so only the
+        # DA side asks for a segmentation.
+        self._donor_needs_segmentation = single_cell and not per_particle
 
         # Read live layer lists once.
         try:
@@ -867,13 +976,18 @@ class _ConfigurePairDialog(QDialog):
         layout = QHBoxLayout(content)
 
         self._donor_widgets = self._build_side(
-            "Donor", self._donor_masks, self._donor_lifetimes, self._donor_labels
+            "Donor",
+            self._donor_masks,
+            self._donor_lifetimes,
+            self._donor_labels,
+            with_segmentation=self._donor_needs_segmentation,
         )
         self._da_widgets = self._build_side(
             "Donor + Acceptor",
             self._da_masks,
             self._da_lifetimes,
             self._da_labels,
+            with_segmentation=single_cell,
         )
         layout.addWidget(self._donor_widgets["box"], 1)
         layout.addWidget(self._da_widgets["box"], 1)
@@ -898,6 +1012,8 @@ class _ConfigurePairDialog(QDialog):
         masks: list[str],
         lifetimes: list[str],
         labels: list[str],
+        *,
+        with_segmentation: bool,
     ) -> dict[str, Any]:
         box = QGroupBox(title)
         form = QFormLayout(box)
@@ -929,7 +1045,7 @@ class _ConfigurePairDialog(QDialog):
         form.addRow("", lifetime_hint)
 
         seg_combo: QComboBox | None = None
-        if self._single_cell:
+        if with_segmentation:
             seg_combo = QComboBox()
             for n in labels:
                 seg_combo.addItem(n)
@@ -975,13 +1091,12 @@ class _ConfigurePairDialog(QDialog):
         _restore(
             self._da_widgets["lifetime"], self._initial.da_lifetime, "_lifetime"
         )
-        if self._single_cell:
-            ds = self._donor_widgets["segmentation"]
-            if ds is not None:
-                _restore(ds, self._initial.donor_segmentation, "")
-            ads = self._da_widgets["segmentation"]
-            if ads is not None:
-                _restore(ads, self._initial.da_segmentation, "")
+        ds = self._donor_widgets["segmentation"]
+        if ds is not None:
+            _restore(ds, self._initial.donor_segmentation, "")
+        ads = self._da_widgets["segmentation"]
+        if ads is not None:
+            _restore(ads, self._initial.da_segmentation, "")
 
     def _wire_signals_for_validation(self) -> None:
         for side in (self._donor_widgets, self._da_widgets):
@@ -1003,11 +1118,12 @@ class _ConfigurePairDialog(QDialog):
             for side in (self._donor_widgets, self._da_widgets)
             for k in ("mask", "phasor", "lifetime")
         )
-        if self._single_cell:
-            ok = ok and all(
-                _has(side, "segmentation")
-                for side in (self._donor_widgets, self._da_widgets)
-            )
+        # A side that asks for a segmentation must have one picked.
+        ok = ok and all(
+            _has(side, "segmentation")
+            for side in (self._donor_widgets, self._da_widgets)
+            if side.get("segmentation") is not None
+        )
         self._ok_btn.setEnabled(ok)
 
     def apply_to(self, cfg: _PairConfig) -> None:
@@ -1023,6 +1139,9 @@ class _ConfigurePairDialog(QDialog):
         cfg.da_mask = _text(self._da_widgets, "mask")
         cfg.da_phasor = _text(self._da_widgets, "phasor")
         cfg.da_lifetime = _text(self._da_widgets, "lifetime")
-        if self._single_cell:
+        # Only overwrite picks the dialog asked for, so segmentations survive
+        # mode toggles.
+        if self._donor_widgets["segmentation"] is not None:
             cfg.donor_segmentation = _text(self._donor_widgets, "segmentation")
+        if self._da_widgets["segmentation"] is not None:
             cfg.da_segmentation = _text(self._da_widgets, "segmentation")

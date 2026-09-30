@@ -420,7 +420,8 @@ class LauncherWindow(QMainWindow):
         self._btn_flim_fret_workflow.setToolTip(
             "Batch workflow: compare donor / donor+acceptor dataset pairs; "
             "compute mean lifetime within (mask ∩ phasor) and a FRET "
-            "efficiency per pair (whole-field) or per cell (single-cell)."
+            "efficiency per pair (whole-field), per cell (single-cell) or "
+            "per particle of the donor+acceptor mask."
         )
         self._btn_flim_fret_workflow.clicked.connect(
             self._on_open_flim_fret_workflow
