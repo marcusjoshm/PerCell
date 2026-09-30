@@ -197,6 +197,61 @@ def test_config_accepts_single_cell_with_both_segmentations():
     assert c.single_cell is True
 
 
+
+# ── Per-particle mode ───────────────────────────────────────
+
+
+def test_config_per_particle_defaults():
+    c = FlimFretConfig(
+        pairs=[_valid_pair()], single_cell=False, output_parent=Path("/tmp/out")
+    )
+    assert c.per_particle is False
+    assert c.min_particle_size == 1.0
+    assert c.min_particle_size_unit == "px"
+
+
+def test_config_per_particle_single_cell_needs_only_da_segmentation():
+    c = FlimFretConfig(
+        pairs=[_valid_pair(da_segmentation="cellpose_qc")],
+        single_cell=True,
+        output_parent=Path("/tmp/out"),
+        per_particle=True,
+    )
+    assert c.per_particle is True
+
+
+def test_config_per_particle_single_cell_still_requires_da_segmentation():
+    with pytest.raises(ValueError, match="da_segmentation is required"):
+        FlimFretConfig(
+            pairs=[_valid_pair(donor_segmentation="cellpose_qc")],
+            single_cell=True,
+            output_parent=Path("/tmp/out"),
+            per_particle=True,
+        )
+
+
+def test_config_rejects_unknown_particle_size_unit():
+    with pytest.raises(ValueError, match="min_particle_size_unit"):
+        FlimFretConfig(
+            pairs=[_valid_pair()],
+            single_cell=False,
+            output_parent=Path("/tmp/out"),
+            per_particle=True,
+            min_particle_size_unit="um",
+        )
+
+
+@pytest.mark.parametrize("size", [-1.0, float("nan")])
+def test_config_rejects_negative_or_nan_particle_size(size):
+    with pytest.raises(ValueError, match="min_particle_size must be"):
+        FlimFretConfig(
+            pairs=[_valid_pair()],
+            single_cell=False,
+            output_parent=Path("/tmp/out"),
+            per_particle=True,
+            min_particle_size=size,
+        )
+
 def test_config_is_frozen():
     c = FlimFretConfig(
         pairs=[_valid_pair()],

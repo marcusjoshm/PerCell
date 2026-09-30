@@ -162,6 +162,21 @@ def test_discovery_single_cell_accepts_dataset_with_labels(tmp_path):
     assert out[0].qualifies is True
 
 
+
+def test_discovery_per_particle_single_cell_does_not_require_labels(tmp_path):
+    """Per-particle + single-cell needs a segmentation on the DA side only, and
+    discovery cannot tell donor from DA, so labels are checked in Configure."""
+    _make_h5(
+        tmp_path / "no_labels.h5",
+        channel_names=["ch0", "ch0_unfiltered_lifetime"],
+        mask_names=["cells_mask", "phasor_ch0_1_phasor"],
+        label_names=[],
+    )
+    out = discover_flim_fret_candidates(
+        tmp_path, single_cell=True, per_particle=True
+    )
+    assert out[0].qualifies is True
+
 def test_discovery_returns_dataset_candidate_dataclass(tmp_path):
     _make_h5(
         tmp_path / "good.h5",

@@ -557,3 +557,186 @@ def test_dialog_does_not_mutate_session_state():
     assert "session.set_active" not in src
     assert "session.active_channel =" not in src
     assert "viewer_win.add_" not in src
+
+
+# ── Per-particle mode ─────────────────────────────────────
+
+
+def test_particle_size_controls_follow_per_particle_toggle(qtbot):
+    dlg = FlimFretDialog()
+    qtbot.addWidget(dlg)
+    assert dlg._per_particle_check.isChecked() is False
+    assert dlg._min_particle_size_spin.isEnabled() is False
+    assert dlg._min_particle_size_unit_combo.isEnabled() is False
+    assert dlg._min_particle_size_spin.value() == 1.0
+    assert dlg._min_particle_size_unit_combo.currentData() == "px"
+
+    dlg._per_particle_check.setChecked(True)
+    assert dlg._min_particle_size_spin.isEnabled() is True
+    assert dlg._min_particle_size_unit_combo.isEnabled() is True
+    units = [
+        dlg._min_particle_size_unit_combo.itemData(i)
+        for i in range(dlg._min_particle_size_unit_combo.count())
+    ]
+    assert units == ["px", "um2"]
+
+
+def test_per_particle_single_cell_keeps_datasets_without_labels(qtbot, tmp_path):
+    _make_h5(
+        tmp_path / "no_labels.h5",
+        channel_names=["ch0_unfiltered_lifetime"],
+        mask_names=["cells_mask", "phasor_ch0_1_phasor"],
+    )
+    dlg = FlimFretDialog()
+    qtbot.addWidget(dlg)
+    dlg._set_source_folder(tmp_path)
+    dlg._single_cell_check.setChecked(True)
+    assert dlg._eligible_paths() == []
+    dlg._per_particle_check.setChecked(True)
+    assert len(dlg._eligible_paths()) == 1
+
+
+def test_configure_per_particle_single_cell_asks_da_segmentation_only(
+    qtbot, tmp_path
+):
+    donor = _good_dataset(tmp_path, "donor.h5")
+    da = _good_dataset(tmp_path, "da.h5")
+    parent = QPushButton()
+    qtbot.addWidget(parent)
+    cfg = _PairConfig()
+    sub = _ConfigurePairDialog(
+        parent,
+        donor_path=donor,
+        da_path=da,
+        single_cell=True,
+        per_particle=True,
+        initial=cfg,
+    )
+    qtbot.addWidget(sub)
+    assert sub._donor_widgets["segmentation"] is None
+    assert isinstance(sub._da_widgets["segmentation"], QComboBox)
+    assert sub._ok_btn.isEnabled()
+    sub.apply_to(cfg)
+    assert cfg.da_segmentation == "cellpose_qc"
+    assert cfg.donor_segmentation == ""
+
+
+def test_pair_config_per_particle_single_cell_needs_only_da_segmentation():
+    cfg = _PairConfig()
+    for field in ("donor_mask", "donor_phasor", "donor_lifetime",
+                  "da_mask", "da_phasor", "da_lifetime"):
+        setattr(cfg, field, "x")
+    cfg.configured = True
+    cfg.da_segmentation = "cellpose_qc"
+    assert cfg.is_complete(single_cell=True, per_particle=True) is True
+    assert cfg.is_complete(single_cell=True) is False
+
+
+def test_build_config_carries_per_particle_settings(qtbot, tmp_path):
+    donor = _good_dataset(tmp_path, "donor.h5")
+    da = _good_dataset(tmp_path, "da.h5")
+    dlg = FlimFretDialog()
+    qtbot.addWidget(dlg)
+    dlg._set_source_folder(tmp_path)
+    dlg._output_folder_edit.setText(str(tmp_path / "out"))
+    dlg._single_cell_check.setChecked(True)
+    dlg._per_particle_check.setChecked(True)
+    dlg._min_particle_size_spin.setValue(2.5)
+    dlg._min_particle_size_unit_combo.setCurrentIndex(
+        dlg._min_particle_size_unit_combo.findData("um2")
+    )
+    _add_configured_pair(dlg, donor_path=donor, da_path=da)
+    dlg._pair_configs[0].da_segmentation = "cellpose_qc"
+    dlg._update_run_button()
+    assert dlg._start_btn.isEnabled()
+
+    config = dlg._build_config()
+    assert config.per_particle is True
+    assert config.single_cell is True
+    assert config.min_particle_size == 2.5
+    assert config.min_particle_size_unit == "um2"
+    assert config.pairs[0].donor_segmentation is None
+    assert config.pairs[0].da_segmentation == "cellpose_qc"
+
+
+def test_start_writes_per_particle_csv_columns(qtbot, tmp_path, monkeypatch):
+    donor = _good_dataset(tmp_path, "donor.h5")
+    da = _good_dataset(tmp_path, "da.h5")
+
+    def fake_orchestrator(config, *, progress_callback, cancel_check, run_log):
+        pair = config.pairs[0]
+        result = FlimFretPairResult(
+            pair=pair,
+            status=FlimFretStatus.SUCCEEDED,
+            reason=None,
+            rows=[{
+                "pair_name": pair.name,
+                "donor_dataset": pair.donor_h5.name,
+                "da_dataset": pair.da_h5.name,
+                "cell_id": "",
+                "particle_id": 1,
+                "area_px": 4,
+                "area_um2": "",
+                "donor_mean_lifetime": 3.0,
+                "da_mean_lifetime": 1.5,
+                "fret_efficiency": 0.5,
+                "n_pixels_donor": 5,
+                "n_pixels_da": 4,
+                "n_particles_donor_reference": 2,
+                "n_da_particles_skipped": 0,
+            }],
+            n_pixels_donor=5,
+            n_cells_donor_reference=0,
+            n_da_cells_skipped=0,
+            n_particles_donor_reference=2,
+        )
+        progress_callback(pair, result)
+        return FlimFretReport(results=[result])
+
+    dlg = FlimFretDialog(orchestrator=fake_orchestrator)
+    qtbot.addWidget(dlg)
+    dlg._set_source_folder(tmp_path)
+    dlg._output_folder_edit.setText(str(tmp_path / "out"))
+    dlg._per_particle_check.setChecked(True)
+    _add_configured_pair(dlg, donor_path=donor, da_path=da)
+    monkeypatch.setattr(
+        QMessageBox, "information", staticmethod(lambda *args, **kwargs: None)
+    )
+    dlg._on_start_clicked()
+
+    header = (dlg.last_run_folder / "flim_fret_results.csv").read_text().splitlines()[0]
+    assert header == (
+        "pair_name,donor_dataset,da_dataset,cell_id,particle_id,area_px,"
+        "area_um2,donor_mean_lifetime,da_mean_lifetime,fret_efficiency,"
+        "n_pixels_donor,n_pixels_da,n_particles_donor_reference,"
+        "n_da_particles_skipped"
+    )
+
+
+def test_per_particle_run_end_to_end_with_real_orchestrator(
+    qtbot, tmp_path, monkeypatch
+):
+    """Dialog -> real run_flim_fret -> CSV, no fakes. Each 4x4 all-ones mask
+    is one 16-px particle with lifetime 1.0 on both sides, so E = 0."""
+    donor = _good_dataset(tmp_path, "donor.h5")
+    da = _good_dataset(tmp_path, "da.h5")
+    dlg = FlimFretDialog()
+    qtbot.addWidget(dlg)
+    dlg._set_source_folder(tmp_path)
+    dlg._output_folder_edit.setText(str(tmp_path / "out"))
+    dlg._per_particle_check.setChecked(True)
+    _add_configured_pair(dlg, donor_path=donor, da_path=da)
+    monkeypatch.setattr(
+        QMessageBox, "information", staticmethod(lambda *args, **kwargs: None)
+    )
+    dlg._on_start_clicked()
+
+    import pandas as pd
+
+    df = pd.read_csv(dlg.last_run_folder / "flim_fret_results.csv")
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["particle_id"] == 1
+    assert row["area_px"] == 16
+    assert row["n_particles_donor_reference"] == 1
+    assert row["fret_efficiency"] == 0
