@@ -86,12 +86,23 @@ def run_flim_fret(
     """
     results: list[FlimFretPairResult] = []
     if run_log is not None:
+        # The size threshold decides which particles exist, so record it with
+        # per-particle runs for provenance.
+        particle_fields = (
+            {
+                "min_particle_size": config.min_particle_size,
+                "min_particle_size_unit": config.min_particle_size_unit,
+            }
+            if config.per_particle
+            else {}
+        )
         run_log.log(
             phase="flim_fret",
             event="run_started",
             n_pairs=len(config.pairs),
             single_cell=config.single_cell,
             per_particle=config.per_particle,
+            **particle_fields,
         )
 
     cancelled = False
