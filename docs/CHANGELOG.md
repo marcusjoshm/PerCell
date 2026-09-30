@@ -12,6 +12,12 @@ the README for the current list.
 
 ### Added
 
+- **Whole-field presets decapping-sensor-v7 and v8.** Both measure three
+  regions, each with its own mask: the condensate, a new optional
+  **intermediate_mask** and the dilute mask. A single mNG filter mask and
+  interaction mask apply to all three regions. v7 leaves Halo pixels outside the
+  interaction mask out of each mean; v8 counts them as zero. Results match the
+  mask-intensity-analysis CLI (commit 9f11fa1). Presets v2 to v6 are unchanged.
 - **OME-Zarr import (September 2026).** The In-file mode of *Import
   Dataset*, single-cell workflows and `percell-import` accept OME-Zarr
   stores (`.zarr` / `.ome.zarr` folders), such as the IDR publishes. PerCell

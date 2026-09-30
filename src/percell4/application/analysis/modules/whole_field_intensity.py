@@ -5,10 +5,13 @@ Schema-only :class:`Analysis` subclass wrapping the pure
 
 Modeling notes (see the plan's Key Technical Decisions):
 
-* The four intermediate masks are plain ``optional_inputs`` (NOT a group):
-  a single ``at_least_one`` group would make all four de-facto required and
-  break the two-region / v2 / v3 runs. The v4/v5 requirement is enforced via
-  ``intermediate_assemblies = BoolParam(requires=(...four roles...))``.
+* The intermediate masks are plain ``optional_inputs`` (NOT a group):
+  a single ``at_least_one`` group would make them de-facto required and
+  break the two-region / v2 / v3 runs. ``intermediate_assemblies`` requires
+  ``mng_mask`` + ``interaction_mask`` (shared by both three-region layouts);
+  the layout-specific masks are checked in ``run()`` — ``dcp2_mask_2`` +
+  ``interaction_mask_2`` for v4/v5, ``intermediate_mask`` for v7/v8
+  (``intermediate_master_mask``, which also carries it as a ``requires``).
 * The dual-typed CLI background mode (keyword OR integer) is modeled as a
   ``ChoiceParam`` (keywords + ``"manual"``) plus an ``IntParam`` manual value;
   ``run()`` maps ``"manual"`` to the integer and other choices to the keyword.
@@ -70,7 +73,7 @@ class WholeFieldIntensity(Analysis):
 
     Aggregate (not per-particle) quantification of a Halo channel vs an mNG
     normalization channel across a P-body compartment and a dilute-cytoplasm
-    compartment (plus an optional v4/v5 intermediate compartment), with
+    compartment (plus an optional v4/v5 or v7/v8 intermediate compartment), with
     per-field background subtraction and an optional single-cell mode.
 
     The math lives in
@@ -83,7 +86,7 @@ class WholeFieldIntensity(Analysis):
     version = "1.0.0"
     description = (
         "Whole-field (aggregate) mNG/Halo compartment quantification with "
-        "per-field background subtraction. Presets decapping-sensor-v2..v6; "
+        "per-field background subtraction. Presets decapping-sensor-v2..v8; "
         "optional three-region (intermediate) and single-cell modes."
     )
 
@@ -105,15 +108,18 @@ class WholeFieldIntensity(Analysis):
         "cp_mask": ImageRole(kind="label", dtype="labels",
                              desc="Cell-segmentation labels (single_cell)"),
         "mng_mask": ImageRole(kind="mask", dtype="binary",
-                              desc="mNG-filter mask (mNG_filter, percent, v4/v5)"),
+                              desc="mNG-filter mask (mNG_filter, percent, v4/v5, v7/v8)"),
         "interaction_mask": ImageRole(kind="mask", dtype="binary",
-                                      desc="FLIM interaction mask (FLIM_filter, v4/v5)"),
+                                      desc="FLIM interaction mask (FLIM_filter, v4/v5, v7/v8)"),
         "sir_mask": ImageRole(kind="mask", dtype="binary",
                               desc="SiR mask (SiR_subtract / SiR_filter)"),
         "dcp2_mask_2": ImageRole(kind="mask", dtype="binary",
                                  desc="Inner Dcp2 mask (v4/v5 intermediate)"),
         "interaction_mask_2": ImageRole(kind="mask", dtype="binary",
                                         desc="Inner interaction mask (v4/v5)"),
+        "intermediate_mask": ImageRole(kind="mask", dtype="binary",
+                                       desc="Intermediate-region master mask "
+                                       "(v7/v8)"),
     }
 
     # ── Parameters ────────────────────────────────────────────────
@@ -163,13 +169,20 @@ class WholeFieldIntensity(Analysis):
             desc="Add pct_halo_in_mNG_* columns per compartment."),
         "intermediate_assemblies": BoolParam(
             default=False,
-            requires=("mng_mask", "interaction_mask", "dcp2_mask_2",
-                      "interaction_mask_2"),
-            desc="Three-region (P-body/intermediate/dilute) measurement."),
+            requires=("mng_mask", "interaction_mask"),
+            desc="Three-region (P-body/intermediate/dilute) measurement. "
+            "Also needs dcp2_mask_2 + interaction_mask_2 (v4/v5), or "
+            "intermediate_mask with intermediate_master_mask (v7/v8)."),
         "intermediate_zero_fill": BoolParam(
             default=False,
-            desc="v5 Halo handling for intermediate_assemblies "
-            "(zero-fill outside inner masks)."),
+            desc="Zero-fill Halo handling for intermediate_assemblies "
+            "(v5 / v8) instead of intersect (v4 / v7)."),
+        "intermediate_master_mask": BoolParam(
+            default=False, requires=("intermediate_mask",),
+            desc="v7/v8 three-region layout: P-body, intermediate and dilute "
+            "are each their own master mask (intermediate_mask), with a "
+            "single mng_mask / interaction_mask applied uniformly to all "
+            "three. Needs intermediate_assemblies."),
         "single_cell": BoolParam(
             default=False, requires=("cp_mask",),
             desc="Aggregate per cell using cp_mask; one row per cell."),
@@ -245,6 +258,33 @@ class WholeFieldIntensity(Analysis):
             "SiR_filter": False, "FLIM_filter": "zero", "mNG_in_FLIM": False,
             "intermediate_assemblies": False, "intermediate_zero_fill": False,
         },
+        # Three-region layout redefined: P-body (condensate_mask),
+        # intermediate (intermediate_mask) and dilute (dilute_mask) are each
+        # their own master mask, assumed mutually exclusive and used as
+        # provided. A single mng_mask (Dcp2) / interaction_mask applies to
+        # all three regions, P-body included. v7 = intersect (v4-style): mNG
+        # over region & mng_mask, Halo over region & interaction_mask.
+        "decapping-sensor-v7": {
+            "min_size": 2, "mng_bg_mode": "manual", "mng_bg_value": 0,
+            "halo_bg_mode": "manual", "halo_bg_value": 0, "mNG_filter": "NaN",
+            "percent": True, "exclude_halo_zero": True,
+            "exclude_halo_one": False, "SiR_subtract": "none",
+            "SiR_filter": False, "FLIM_filter": "zero", "mNG_in_FLIM": False,
+            "intermediate_assemblies": True, "intermediate_zero_fill": False,
+            "intermediate_master_mask": True,
+        },
+        # Like v7 but zero-fill (v5-style): Halo zeros outside
+        # interaction_mask are INCLUDED in every region's mean, and mNG
+        # area_px reflects the full master mask. Percent columns match v7.
+        "decapping-sensor-v8": {
+            "min_size": 2, "mng_bg_mode": "manual", "mng_bg_value": 0,
+            "halo_bg_mode": "manual", "halo_bg_value": 0, "mNG_filter": "NaN",
+            "percent": True, "exclude_halo_zero": True,
+            "exclude_halo_one": False, "SiR_subtract": "none",
+            "SiR_filter": False, "FLIM_filter": "zero", "mNG_in_FLIM": False,
+            "intermediate_assemblies": True, "intermediate_zero_fill": True,
+            "intermediate_master_mask": True,
+        },
     }
 
     # ── Preset-aware role gating (U3 capability) ──────────────────
@@ -253,11 +293,29 @@ class WholeFieldIntensity(Analysis):
     # (else the Halo filtering never runs and the means are wrong) — so
     # both are required. The v4/v5 intermediate masks and the SiR mask are
     # irrelevant to v6's two-region path, so they are hidden.
+    # v4/v5 need their inner masks (no longer part of the
+    # intermediate_assemblies requires, which v7/v8 share). v7/v8 need the
+    # single Dcp2 / interaction masks plus the intermediate master mask, and
+    # never use the v4/v5 inner masks or the SiR mask.
     preset_required_inputs = {
+        "decapping-sensor-v4": ("mng_mask", "interaction_mask",
+                                "dcp2_mask_2", "interaction_mask_2"),
+        "decapping-sensor-v5": ("mng_mask", "interaction_mask",
+                                "dcp2_mask_2", "interaction_mask_2"),
         "decapping-sensor-v6": ("mng_mask", "interaction_mask"),
+        "decapping-sensor-v7": ("mng_mask", "interaction_mask",
+                                "intermediate_mask"),
+        "decapping-sensor-v8": ("mng_mask", "interaction_mask",
+                                "intermediate_mask"),
     }
     preset_hidden_inputs = {
+        "decapping-sensor-v4": ("intermediate_mask",),
+        "decapping-sensor-v5": ("intermediate_mask",),
         "decapping-sensor-v6": ("dcp2_mask_2", "interaction_mask_2",
+                                "sir_mask", "intermediate_mask"),
+        "decapping-sensor-v7": ("dcp2_mask_2", "interaction_mask_2",
+                                "sir_mask"),
+        "decapping-sensor-v8": ("dcp2_mask_2", "interaction_mask_2",
                                 "sir_mask"),
     }
     # ``single_cell`` (and its dependent ``channel_cell_mean`` expression
@@ -304,6 +362,7 @@ class WholeFieldIntensity(Analysis):
         sir_filter = bool(params["SiR_filter"])
         intermediate = bool(params["intermediate_assemblies"])
         zero_fill = bool(params["intermediate_zero_fill"])
+        master_mask = bool(params["intermediate_master_mask"])
 
         # Constraints the schema can't express (stricter than the CLI's
         # warn-and-abort): raise so the batch runner records a failed item.
@@ -315,7 +374,21 @@ class WholeFieldIntensity(Analysis):
             raise ValueError(
                 "intermediate_zero_fill requires intermediate_assemblies."
             )
+        if master_mask and not intermediate:
+            raise ValueError(
+                "intermediate_master_mask requires intermediate_assemblies."
+            )
         if intermediate:
+            layout_roles = (
+                ("intermediate_mask",) if master_mask
+                else ("dcp2_mask_2", "interaction_mask_2")
+            )
+            missing = [r for r in layout_roles if inputs.get(r) is None]
+            if missing:
+                raise ValueError(
+                    "intermediate_assemblies requires "
+                    f"{', '.join(missing)} for this three-region layout."
+                )
             if sir_subtract is not None or sir_filter:
                 raise ValueError(
                     "intermediate_assemblies is incompatible with any SiR "
@@ -350,6 +423,7 @@ class WholeFieldIntensity(Analysis):
             sir_mask=inputs.get("sir_mask"),
             dcp2_mask_2=inputs.get("dcp2_mask_2"),
             interaction_mask_2=inputs.get("interaction_mask_2"),
+            intermediate_mask=inputs.get("intermediate_mask"),
             mng_bg_mode=mng_bg,
             halo_bg_mode=halo_bg,
             min_size=params["min_size"],
@@ -364,6 +438,7 @@ class WholeFieldIntensity(Analysis):
             sir_filter=sir_filter,
             intermediate_assemblies=intermediate,
             intermediate_zero_fill=zero_fill,
+            intermediate_master_mask=master_mask,
             channel_cell_mean=bool(params["channel_cell_mean"]),
             export_particles=bool(params["export_particles"]),
             set_label=set_label,
