@@ -401,3 +401,15 @@ def test_no_preset_no_required_or_hidden_roles(qtbot, tmp_path):
     assert dlg._preset_hidden_roles() == ()
     assert dlg._role_combos["sir_mask"].isHidden() is False
     assert dlg._resolve_layer_map().get("sir_mask") == "sir"
+
+
+def test_preset_switch_resets_params_the_preset_omits(qtbot):
+    """v2..v6 predate intermediate_master_mask and run it at its default;
+    switching v7 -> v4 must not leave v7's True showing in the locked widget."""
+    dlg = WholeFieldIntensityDialog()
+    qtbot.addWidget(dlg)
+    _select_preset(dlg, "decapping-sensor-v7")
+    assert dlg._param_getters["intermediate_master_mask"]() is True
+    _select_preset(dlg, "decapping-sensor-v4")
+    assert dlg._param_getters["intermediate_master_mask"]() is False
+    assert dlg._param_getters["intermediate_assemblies"]() is True

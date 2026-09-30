@@ -57,6 +57,7 @@ def _build_h5(path: Path) -> None:
         ("dcp2", "Dcp2_mask"), ("dcp2_2", "Dcp2_mask_2"),
         ("interaction", "interaction_mask"),
         ("interaction_2", "interaction_mask_2"), ("sir", "SiR_mask"),
+        ("interm", "intermediate_mask"),
     ]:
         store.write_array(f"masks/{role}", (_img(fname) > 0).astype(np.uint8))
     store.write_array("labels/cells", _img("cp_mask").astype(np.int32))
@@ -68,6 +69,7 @@ _LAYER_MAP = {
     "mng_mask": "dcp2", "interaction_mask": "interaction",
     "sir_mask": "sir", "dcp2_mask_2": "dcp2_2",
     "interaction_mask_2": "interaction_2", "cp_mask": "cells",
+    "intermediate_mask": "interm",
 }
 
 
@@ -163,6 +165,7 @@ def _build_h5_calibrated(path: Path, pixel_size_um: float) -> None:
         ("dcp2", "Dcp2_mask"), ("dcp2_2", "Dcp2_mask_2"),
         ("interaction", "interaction_mask"),
         ("interaction_2", "interaction_mask_2"), ("sir", "SiR_mask"),
+        ("interm", "intermediate_mask"),
     ]:
         store.write_array(f"masks/{role}", (_img(fname) > 0).astype(np.uint8))
     store.write_array("labels/cells", _img("cp_mask").astype(np.int32))
@@ -266,6 +269,7 @@ def _build_timelapse_h5(
         ("dcp2", "Dcp2_mask"), ("dcp2_2", "Dcp2_mask_2"),
         ("interaction", "interaction_mask"),
         ("interaction_2", "interaction_mask_2"), ("sir", "SiR_mask"),
+        ("interm", "intermediate_mask"),
     ]:
         store.write_mask(role, (_img(fname) > 0).astype(np.uint8))
     cp_plane = _img("cp_mask").astype(np.int32)  # ids {0, 1, 2}
@@ -413,6 +417,80 @@ def test_channel_cell_mean_no_cp_mask_does_not_raise(tmp_path: Path):
 
 # ── decapping-sensor-v6 stress-granule preset (U4) ────────────────
 
+
+# ── v7 / v8: three master-mask regions ────────────────────────────
+
+
+@pytest.mark.parametrize("version", ["v7", "v8"])
+def test_v7_v8_parity_with_cli(tmp_path: Path, version: str):
+    """v7 (intersect) and v8 (zero-fill) whole-field rows match the
+    mask-intensity-analysis CLI (commit 9f11fa1) on the fixture field."""
+    h5 = tmp_path / "f.h5"
+    _build_h5(h5)
+    out = run_analysis("whole_field_intensity", h5, _LAYER_MAP,
+                       preset=f"decapping-sensor-{version}")
+    df = out["whole_field_table"]
+    assert "mNG_intermediate_mean" in df.columns
+    _parity(df, FIXTURE_ROOT / "expected" / f"{version}.csv",
+            sort_key="pbody_area_px")
+
+
+@pytest.mark.parametrize("version", ["v7", "v8"])
+def test_v7_v8_single_cell_parity_with_cli(tmp_path: Path, version: str):
+    h5 = tmp_path / "f.h5"
+    _build_h5(h5)
+    out = run_analysis("whole_field_intensity", h5, _LAYER_MAP,
+                       preset=f"decapping-sensor-{version}",
+                       params={"single_cell": True})
+    # Halo_cell_mean is a PerCell4-only extension the CLI fixture lacks.
+    df = out["whole_field_table"].drop(columns=["Halo_cell_mean"])
+    _parity(df, FIXTURE_ROOT / "expected" / f"{version}_sc.csv",
+            sort_key="cell_id")
+
+
+def test_v7_and_v8_differ_in_region_areas(tmp_path: Path):
+    """v7 intersects each region with mng_mask; v8 keeps the full master
+    mask, so every area_px is strictly larger on this fixture."""
+    h5 = tmp_path / "f.h5"
+    _build_h5(h5)
+    v7 = run_analysis("whole_field_intensity", h5, _LAYER_MAP,
+                      preset="decapping-sensor-v7")["whole_field_table"]
+    v8 = run_analysis("whole_field_intensity", h5, _LAYER_MAP,
+                      preset="decapping-sensor-v8")["whole_field_table"]
+    for col in ("pbody_area_px", "intermediate_area_px", "dilute_area_px"):
+        assert v8[col].iloc[0] > v7[col].iloc[0], col
+
+
+@pytest.mark.parametrize("version", ["v7", "v8"])
+def test_preset_v7_v8_missing_intermediate_mask_raises(tmp_path: Path,
+                                                       version: str):
+    h5 = tmp_path / "f.h5"
+    _build_h5(h5)
+    layer_map = {k: v for k, v in _LAYER_MAP.items()
+                 if k != "intermediate_mask"}
+    with pytest.raises(ValueError, match="intermediate_mask"):
+        run_analysis("whole_field_intensity", h5, layer_map,
+                     preset=f"decapping-sensor-{version}")
+
+
+def test_v4_without_inner_masks_raises(tmp_path: Path):
+    """The v4/v5 inner masks left intermediate_assemblies.requires (v7/v8
+    share that param); a v4-layout run without them still fails loudly."""
+    h5 = tmp_path / "f.h5"
+    _build_h5(h5)
+    layer_map = {k: v for k, v in _LAYER_MAP.items()
+                 if k not in ("dcp2_mask_2", "interaction_mask_2")}
+    with pytest.raises(ValueError, match="dcp2_mask_2"):
+        run_analysis("whole_field_intensity", h5, layer_map, params=_V4)
+
+
+def test_master_mask_without_intermediate_assemblies_raises(tmp_path: Path):
+    h5 = tmp_path / "f.h5"
+    _build_h5(h5)
+    with pytest.raises(ValueError, match="intermediate_master_mask"):
+        run_analysis("whole_field_intensity", h5, _LAYER_MAP,
+                     params={**_V4, "intermediate_assemblies": False,
+                             "intermediate_master_mask": True})
 
 def test_preset_v6_runs(tmp_path: Path):
     """R3 happy path: the v6 stress-granule preset is a two-region run with

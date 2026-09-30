@@ -1,9 +1,9 @@
 """Generate synthetic input TIFFs for the whole_field_intensity regression.
 
-One rich image set (prefix ``fieldA``) carrying every channel the v2-v5
+One rich image set (prefix ``fieldA``) carrying every channel the v2-v8
 presets and single-cell mode can consume, with nested masks so the
-two-region, three-region (v4/v5), and percent code paths all exercise
-non-empty regions. Committed TIFFs are the source of truth; this script
+two-region, three-region (v4/v5 and v7/v8), and percent code paths all
+exercise non-empty regions. Committed TIFFs are the source of truth; this script
 documents how they were produced (fixed values, no randomness).
 
 After (re)generating, the committed expected CSVs under ``expected/`` are
@@ -16,6 +16,10 @@ produced by the UNMODIFIED original CLI (``whole_field_analysis.py``):
         --data-dir . --output expected/v2_sc.csv
     whole_field_analysis.py --preset decapping-sensor-v4 --single-cell \
         --data-dir . --output expected/v4_sc.csv
+
+The v7/v8 expected CSVs come from the mask-intensity-analysis CLI at commit
+9f11fa1 (the first with those presets), same commands with ``v7`` / ``v8``
+and ``--single-cell`` for ``v7_sc.csv`` / ``v8_sc.csv``.
 
 Run from this directory: ``python _generate_fixtures.py``.
 """
@@ -58,6 +62,12 @@ def main() -> None:
     interaction_2 = _block(15, 19, 15, 19)
     sir = _block(6, 40, 6, 40)
 
+    # v7/v8 intermediate-region master mask: the inner Dcp2 block, a band
+    # across both cells and a patch outside Dcp2.
+    intermediate = _block(14, 20, 14, 20)
+    intermediate[25:28, 12:40] = 1
+    intermediate[36:40, 20:26] = 1
+
     # Cell segmentation: two cells split top/bottom within the dilute area.
     cp = np.zeros((H, W), dtype=np.int32)
     cp[4:24, 4:44] = 1
@@ -81,6 +91,7 @@ def main() -> None:
     _write("interaction_mask", interaction)
     _write("interaction_mask_2", interaction_2)
     _write("SiR_mask", sir)
+    _write("intermediate_mask", intermediate)
     _write("cp_mask", cp)
     _write("Halo", halo)
     _write("mNG", mng)
