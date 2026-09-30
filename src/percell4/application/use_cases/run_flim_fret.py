@@ -19,7 +19,15 @@ Per pair:
    donor means (cells with zero valid pixels excluded). The orchestrator then
    emits one row per DA cell (label 0 excluded as background), with that
    single donor reference repeated across all rows of that pair.
-7. ``fret_efficiency = 1 - (da_mean / donor_mean)`` with one division guard:
+7. In per-particle mode each side's mask is split into 8-connected
+   particles, and particles below the minimum size (px or µm², measured on
+   the whole mask blob before phasor gating) are dropped. A particle's
+   lifetime is the mean over its effective pixels. The donor reference is the
+   mean of the donor particle means (each particle weighs once; particles
+   with no effective pixels are excluded). The orchestrator emits one row per
+   DA particle in raster order; with ``single_cell`` also on, each particle
+   carries the cell covering most of its pixels (blank when background wins).
+8. ``fret_efficiency = 1 - (da_mean / donor_mean)`` with one division guard:
    ``NaN`` when ``donor_mean == 0`` or ``isnan(donor_mean)``. Negative donor
    values and ``> 1`` or negative FRET values are reported as-is.
 
@@ -39,6 +47,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+from skimage import measure
 
 from percell4.application.use_cases.flim_fret_discovery import (
     lifetime_store,
@@ -81,6 +90,7 @@ def run_flim_fret(
             event="run_started",
             n_pairs=len(config.pairs),
             single_cell=config.single_cell,
+            per_particle=config.per_particle,
         )
 
     cancelled = False
@@ -106,7 +116,7 @@ def run_flim_fret(
             )
 
         try:
-            result = _compute_pair(pair, single_cell=config.single_cell)
+            result = _compute_pair(pair, config)
         except Exception as exc:  # noqa: BLE001 — never abort the batch
             logger.exception("FLIM-FRET pair %r failed", pair.name)
             result = _empty_result(
@@ -124,6 +134,8 @@ def run_flim_fret(
                 n_pixels_donor=result.n_pixels_donor,
                 n_cells_donor_reference=result.n_cells_donor_reference,
                 n_da_cells_skipped=result.n_da_cells_skipped,
+                n_particles_donor_reference=result.n_particles_donor_reference,
+                n_da_particles_skipped=result.n_da_particles_skipped,
             )
 
         _emit(result, progress_callback)
@@ -159,9 +171,10 @@ def run_flim_fret(
 
 
 def _compute_pair(
-    pair: FlimFretPair, *, single_cell: bool
+    pair: FlimFretPair, config: FlimFretConfig
 ) -> FlimFretPairResult:
     """Do the math for one pair. Returns a ``FlimFretPairResult``."""
+    single_cell = config.single_cell
     missing = validate_pair_layers(pair, single_cell=single_cell)
     if missing:
         return _empty_result(
@@ -184,6 +197,20 @@ def _compute_pair(
     da_lifetime = _read_lifetime_channel(da_store, pair.da_lifetime)
     da_eff = (da_mask > 0) & (da_phasor > 0)
     _assert_shape("DA mask/phasor/lifetime", da_mask, da_phasor, da_lifetime)
+
+    if config.per_particle:
+        da_labels = None
+        if single_cell:
+            assert pair.da_segmentation is not None
+            da_labels = da_store.read_labels(pair.da_segmentation, view_bin=1)
+            _assert_shape("DA labels vs mask", da_labels, da_mask)
+        return _compute_per_particle(
+            pair,
+            config,
+            donor=(donor_mask, donor_eff, donor_lifetime, _pixel_size_um(donor_store)),
+            da=(da_mask, da_eff, da_lifetime, _pixel_size_um(da_store)),
+            da_labels=da_labels,
+        )
 
     if not single_cell:
         return _compute_whole_field(
@@ -331,6 +358,181 @@ def _compute_single_cell(
     )
 
 
+def _compute_per_particle(
+    pair: FlimFretPair,
+    config: FlimFretConfig,
+    *,
+    donor: tuple[np.ndarray, np.ndarray, np.ndarray, float | None],
+    da: tuple[np.ndarray, np.ndarray, np.ndarray, float | None],
+    da_labels: np.ndarray | None,
+) -> FlimFretPairResult:
+    """One row per DA particle against the mean of donor particle means.
+
+    ``donor`` / ``da`` are ``(mask, effective_mask, lifetime, pixel_size_um)``.
+    """
+    unit = config.min_particle_size_unit
+    if unit == "um2":
+        for side, h5_path, (_, _, _, ps) in (
+            ("donor", pair.donor_h5, donor), ("DA", pair.da_h5, da)
+        ):
+            if ps is None:
+                return _empty_result(
+                    pair,
+                    FlimFretStatus.ERROR,
+                    reason=(
+                        f"minimum particle size is in µm² but the {side} "
+                        f"dataset {h5_path.name} has no pixel size"
+                    ),
+                )
+
+    # Donor reference: mean of the donor particle means.
+    d_mask, d_eff, d_life, d_ps = donor
+    d_labeled, d_ids, _ = _label_particles(
+        d_mask, config.min_particle_size, unit, d_ps
+    )
+    d_counts, d_sums = _particle_sums(d_labeled, d_eff, d_life)
+    d_means = [
+        d_sums[pid] / d_counts[pid] for pid in d_ids if d_counts[pid] > 0
+    ]
+    n_ref = len(d_means)
+    n_pixels_donor = int(sum(int(d_counts[pid]) for pid in d_ids))
+    donor_ref = float(np.mean(d_means)) if d_means else float("nan")
+
+    a_mask, a_eff, a_life, a_ps = da
+    a_labeled, a_ids, a_areas = _label_particles(
+        a_mask, config.min_particle_size, unit, a_ps
+    )
+    a_counts, a_sums = _particle_sums(a_labeled, a_eff, a_life)
+    cells = (
+        _majority_cells(a_labeled, da_labels, a_ids)
+        if da_labels is not None
+        else {}
+    )
+
+    rows: list[dict[str, Any]] = []
+    n_skipped = 0
+    for particle_id, pid in enumerate(a_ids, start=1):
+        n = int(a_counts[pid])
+        if n == 0:
+            da_mean = float("nan")
+            n_skipped += 1
+        else:
+            da_mean = float(a_sums[pid] / n)
+        area_px = int(a_areas[pid])
+        rows.append({
+            "pair_name": pair.name,
+            "donor_dataset": pair.donor_h5.name,
+            "da_dataset": pair.da_h5.name,
+            "cell_id": cells.get(pid, ""),
+            "particle_id": particle_id,
+            "area_px": area_px,
+            "area_um2": area_px * a_ps**2 if a_ps is not None else "",
+            "donor_mean_lifetime": donor_ref,
+            "da_mean_lifetime": da_mean,
+            "fret_efficiency": _fret(donor_ref, da_mean),
+            "n_pixels_donor": n_pixels_donor,
+            "n_pixels_da": n,
+            "n_particles_donor_reference": n_ref,
+            "n_da_particles_skipped": None,
+        })
+    for row in rows:
+        row["n_da_particles_skipped"] = n_skipped
+
+    status = (
+        FlimFretStatus.DONOR_REFERENCE_EMPTY
+        if n_ref == 0
+        else FlimFretStatus.SUCCEEDED
+    )
+    reason = (
+        "donor reference pool was empty (no donor particles with valid pixels)"
+        if status is FlimFretStatus.DONOR_REFERENCE_EMPTY
+        else None
+    )
+    return FlimFretPairResult(
+        pair=pair,
+        status=status,
+        reason=reason,
+        rows=rows,
+        n_pixels_donor=n_pixels_donor,
+        n_cells_donor_reference=0,
+        n_da_cells_skipped=0,
+        n_particles_donor_reference=n_ref,
+        n_da_particles_skipped=n_skipped,
+    )
+
+
+def _label_particles(
+    mask: np.ndarray,
+    min_size: float,
+    unit: str,
+    pixel_size_um: float | None,
+) -> tuple[np.ndarray, list[int], np.ndarray]:
+    """Label 8-connected mask particles and keep those at least ``min_size``.
+
+    Size is the whole mask blob (before phasor gating), in px or µm². Returns
+    ``(labeled, kept_ids, areas_px)``: ``kept_ids`` are ascending label ids,
+    which ``skimage.measure.label`` assigns in raster order; ``areas_px`` is
+    indexed by label id.
+    """
+    labeled = measure.label(mask > 0, connectivity=2)
+    areas_px = np.bincount(labeled.ravel())
+    sizes = areas_px.astype(np.float64)
+    if unit == "um2":
+        assert pixel_size_um is not None
+        sizes = sizes * pixel_size_um**2
+    # isclose absorbs float error when a µm² area lands on the threshold.
+    keep = (sizes >= min_size) | np.isclose(sizes, min_size, rtol=1e-9, atol=0)
+    kept_ids = [int(i) for i in np.nonzero(keep)[0] if i != 0]
+    return labeled, kept_ids, areas_px
+
+
+def _particle_sums(
+    labeled: np.ndarray, eff: np.ndarray, lifetime: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-label count and lifetime sum over effective pixels."""
+    n = int(labeled.max()) + 1
+    sel = labeled[eff]
+    counts = np.bincount(sel, minlength=n)
+    sums = np.bincount(
+        sel, weights=lifetime[eff].astype(np.float64), minlength=n
+    )
+    return counts, sums
+
+
+def _majority_cells(
+    labeled: np.ndarray, cell_labels: np.ndarray, ids: list[int]
+) -> dict[int, int | str]:
+    """Map each particle to the cell covering most of its pixels.
+
+    Ties between cells go to the lowest cell id; a cell that ties with
+    background wins; the particle is blank (``""``) only when background
+    covers more of it than any single cell.
+    """
+    sel = labeled > 0
+    pairs, counts = np.unique(
+        np.stack([labeled[sel], cell_labels[sel].astype(np.int64)]),
+        axis=1,
+        return_counts=True,
+    )
+    background: dict[int, int] = {}
+    best: dict[int, tuple[int, int]] = {}
+    for pid, cid, cnt in zip(pairs[0], pairs[1], counts):
+        pid, cid, cnt = int(pid), int(cid), int(cnt)
+        if cid == 0:
+            background[pid] = cnt
+        elif pid not in best or cnt > best[pid][1]:
+            # Cells arrive in ascending id per particle, so ">" keeps the
+            # lowest id on ties.
+            best[pid] = (cid, cnt)
+    out: dict[int, int | str] = {}
+    for pid in ids:
+        if pid in best and best[pid][1] >= background.get(pid, 0):
+            out[pid] = best[pid][0]
+        else:
+            out[pid] = ""
+    return out
+
+
 # ── Small helpers ──────────────────────────────────────────
 
 
@@ -345,6 +547,15 @@ def _read_lifetime_channel(store: DatasetStore, name: str) -> np.ndarray:
     channel_names = store.metadata.get("channel_names", []) or []
     channel_idx = channel_names.index(name)
     return store.read_channel("intensity", channel_idx, view_bin=1)
+
+
+def _pixel_size_um(store: DatasetStore) -> float | None:
+    """The dataset's pixel size in µm, or ``None`` when absent or not positive."""
+    raw = store.metadata.get("pixel_size_um")
+    if not raw:
+        return None
+    value = float(raw)
+    return value if value > 0 else None
 
 
 def _cell_ids(labels: np.ndarray) -> list[int]:

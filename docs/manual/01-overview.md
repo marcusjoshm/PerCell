@@ -173,7 +173,7 @@ See [FLIM](07-flim.md).
 
 - **Single-cell thresholding analysis workflow** — from TIFFs or datasets to a measurement table: Cellpose with review of each segmentation, tracking, any number of thresholding rounds, particle analysis, an optional dilute-phase mask, and parquet and CSV export with chosen columns.
 - **Automated phasor-masks workflow** — two lifetime masks per channel from a fitted phasor ellipse.
-- **FLIM-FRET analysis** — FRET efficiency from donor and donor + acceptor pairs, per pair or per cell.
+- **FLIM-FRET analysis** — FRET efficiency from donor and donor + acceptor pairs, per pair, per cell or per particle.
 - **Dilute phase mask from mask** — dilute-phase masks across many datasets.
 - **Analyses** — per-particle donut background subtraction, per-particle multi-channel intensity, and whole-field decapping-sensor intensity, with presets for established protocols.
 

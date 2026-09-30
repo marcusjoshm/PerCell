@@ -200,13 +200,13 @@ Makes two lifetime masks per channel in many datasets. It fits a GMM ellipse to 
 
 ## FLIM-FRET analysis
 
-Compares pairs of datasets, a donor-only sample and a donor + acceptor sample, and computes FRET efficiency from their lifetimes, per pair or per cell.
+Compares pairs of datasets, a donor-only sample and a donor + acceptor sample, and computes FRET efficiency from their lifetimes, per pair, per cell or per particle.
 
 ![FLIM-FRET analysis with two pairs](images/flim-fret.png)
 
-1. **Mode** — Tick **Single-cell analysis** to compute FRET per cell instead of per pair.
+1. **Mode** — Tick **Single-cell analysis** to compute FRET per cell instead of per pair. Tick **Per-particle analysis** to compute FRET for each particle (each connected blob) of the donor + acceptor mask. The donor-only reference is then the average of the donor-only particle means, so each particle counts once. **Minimum particle size:** drops smaller particles on both sides, in px or µm² (µm² needs a pixel size on every dataset). With both boxes ticked, each particle is tagged with the cell covering most of it, and only the donor + acceptor side needs a segmentation. Per-particle results add `particle_id`, `area_px` and `area_um2` columns.
 2. **Folders** — The **Source folder:** of datasets and the **Output parent folder:**. PerCell reports how many datasets it can use, and lists each one it excludes with the layers it is missing.
-3. **Pairs** — **Add pair** and choose the donor and donor + acceptor datasets. **Configure** each pair: the **Mask layer:**, **Phasor mask:** and **Lifetime channel:** for each side, and the **Segmentation:** in single-cell mode.
+3. **Pairs** — **Add pair** and choose the donor and donor + acceptor datasets. **Configure** each pair: the **Mask layer:**, **Phasor mask:** and **Lifetime channel:** for each side, and the **Segmentation:** in single-cell mode (donor + acceptor side only when per-particle is also ticked).
 
    ![Configure pair](images/flim-fret-configure-pair.png)
 

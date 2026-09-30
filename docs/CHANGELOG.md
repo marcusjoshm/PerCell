@@ -12,6 +12,14 @@ the README for the current list.
 
 ### Added
 
+- **Per-particle FRET efficiency (FLIM-FRET analysis).** A new
+  **Per-particle analysis** mode gives each particle (8-connected blob) of the
+  donor + acceptor mask its own FRET efficiency, measured against a donor-only
+  reference built the same way: the average of the donor-only particle means.
+  A minimum particle size in px or µm² (default 1 px) applies to both sides.
+  With single-cell also on, each particle carries the cell covering most of it.
+  Rows add `particle_id`, `area_px` and `area_um2`; whole-field and single-cell
+  CSVs are unchanged.
 - **Whole-field presets decapping-sensor-v7 and v8.** Both measure three
   regions, each with its own mask: the condensate, a new optional
   **intermediate_mask** and the dilute mask. A single mNG filter mask and
