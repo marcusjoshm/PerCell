@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from percell4.domain.measure.iterative_otsu_names import (
     SCOPE_NAMES,
@@ -848,7 +848,8 @@ class FlimFretPair:
 
 
 # Units for ``FlimFretConfig.min_particle_size``.
-FLIM_FRET_PARTICLE_SIZE_UNITS = ("px", "um2")
+FlimFretParticleSizeUnit = Literal["px", "um2"]
+FLIM_FRET_PARTICLE_SIZE_UNITS: tuple[FlimFretParticleSizeUnit, ...] = ("px", "um2")
 
 
 @dataclass(frozen=True)
@@ -874,7 +875,7 @@ class FlimFretConfig:
     output_parent: Path
     per_particle: bool = False
     min_particle_size: float = 1.0
-    min_particle_size_unit: str = "px"
+    min_particle_size_unit: FlimFretParticleSizeUnit = "px"
 
     def __post_init__(self) -> None:
         if not self.pairs:

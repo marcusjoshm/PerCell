@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 from skimage import measure
@@ -58,6 +58,7 @@ from percell4.workflows.models import (
     FlimFretConfig,
     FlimFretPair,
     FlimFretPairResult,
+    FlimFretParticleSizeUnit,
     FlimFretReport,
     FlimFretStatus,
 )
@@ -184,6 +185,24 @@ def _compute_pair(
     donor_store = lifetime_store(pair.donor_h5)
     da_store = lifetime_store(pair.da_h5)
 
+    if config.per_particle:
+        donor_ps = _pixel_size_um(donor_store)
+        da_ps = _pixel_size_um(da_store)
+        # Fail before loading any arrays when a µm² threshold can't apply.
+        if config.min_particle_size_unit == "um2":
+            for side, h5_path, ps in (
+                ("donor", pair.donor_h5, donor_ps), ("DA", pair.da_h5, da_ps)
+            ):
+                if ps is None:
+                    return _empty_result(
+                        pair,
+                        FlimFretStatus.ERROR,
+                        reason=(
+                            f"minimum particle size is in µm² but the {side} "
+                            f"dataset {h5_path.name} has no pixel size"
+                        ),
+                    )
+
     # Load arrays at view_bin=1. native_shape lock guarantees per-dataset
     # consistency; cross-dataset shapes may differ and that's fine.
     donor_mask = donor_store.read_mask(pair.donor_mask, view_bin=1)
@@ -207,8 +226,8 @@ def _compute_pair(
         return _compute_per_particle(
             pair,
             config,
-            donor=(donor_mask, donor_eff, donor_lifetime, _pixel_size_um(donor_store)),
-            da=(da_mask, da_eff, da_lifetime, _pixel_size_um(da_store)),
+            donor=_Side(donor_mask, donor_eff, donor_lifetime, donor_ps),
+            da=_Side(da_mask, da_eff, da_lifetime, da_ps),
             da_labels=da_labels,
         )
 
@@ -358,39 +377,35 @@ def _compute_single_cell(
     )
 
 
+class _Side(NamedTuple):
+    """One side's arrays for per-particle compute."""
+
+    mask: np.ndarray
+    eff: np.ndarray  # mask & phasor: the pixels a lifetime mean may use
+    lifetime: np.ndarray
+    pixel_size_um: float | None
+
+
 def _compute_per_particle(
     pair: FlimFretPair,
     config: FlimFretConfig,
     *,
-    donor: tuple[np.ndarray, np.ndarray, np.ndarray, float | None],
-    da: tuple[np.ndarray, np.ndarray, np.ndarray, float | None],
+    donor: _Side,
+    da: _Side,
     da_labels: np.ndarray | None,
 ) -> FlimFretPairResult:
     """One row per DA particle against the mean of donor particle means.
 
-    ``donor`` / ``da`` are ``(mask, effective_mask, lifetime, pixel_size_um)``.
+    A µm² threshold requires both pixel sizes; ``_compute_pair`` has already
+    rejected the pair otherwise.
     """
-    unit = config.min_particle_size_unit
-    if unit == "um2":
-        for side, h5_path, (_, _, _, ps) in (
-            ("donor", pair.donor_h5, donor), ("DA", pair.da_h5, da)
-        ):
-            if ps is None:
-                return _empty_result(
-                    pair,
-                    FlimFretStatus.ERROR,
-                    reason=(
-                        f"minimum particle size is in µm² but the {side} "
-                        f"dataset {h5_path.name} has no pixel size"
-                    ),
-                )
+    size, unit = config.min_particle_size, config.min_particle_size_unit
 
     # Donor reference: mean of the donor particle means.
-    d_mask, d_eff, d_life, d_ps = donor
     d_labeled, d_ids, _ = _label_particles(
-        d_mask, config.min_particle_size, unit, d_ps
+        donor.mask, size, unit, donor.pixel_size_um
     )
-    d_counts, d_sums = _particle_sums(d_labeled, d_eff, d_life)
+    d_counts, d_sums = _particle_sums(d_labeled, donor.eff, donor.lifetime)
     d_means = [
         d_sums[pid] / d_counts[pid] for pid in d_ids if d_counts[pid] > 0
     ]
@@ -398,26 +413,22 @@ def _compute_per_particle(
     n_pixels_donor = int(sum(int(d_counts[pid]) for pid in d_ids))
     donor_ref = float(np.mean(d_means)) if d_means else float("nan")
 
-    a_mask, a_eff, a_life, a_ps = da
     a_labeled, a_ids, a_areas = _label_particles(
-        a_mask, config.min_particle_size, unit, a_ps
+        da.mask, size, unit, da.pixel_size_um
     )
-    a_counts, a_sums = _particle_sums(a_labeled, a_eff, a_life)
+    a_counts, a_sums = _particle_sums(a_labeled, da.eff, da.lifetime)
     cells = (
         _majority_cells(a_labeled, da_labels, a_ids)
         if da_labels is not None
         else {}
     )
+    n_skipped = sum(1 for pid in a_ids if a_counts[pid] == 0)
+    ps = da.pixel_size_um
 
     rows: list[dict[str, Any]] = []
-    n_skipped = 0
     for particle_id, pid in enumerate(a_ids, start=1):
         n = int(a_counts[pid])
-        if n == 0:
-            da_mean = float("nan")
-            n_skipped += 1
-        else:
-            da_mean = float(a_sums[pid] / n)
+        da_mean = float(a_sums[pid] / n) if n else float("nan")
         area_px = int(a_areas[pid])
         rows.append({
             "pair_name": pair.name,
@@ -426,17 +437,15 @@ def _compute_per_particle(
             "cell_id": cells.get(pid, ""),
             "particle_id": particle_id,
             "area_px": area_px,
-            "area_um2": area_px * a_ps**2 if a_ps is not None else "",
+            "area_um2": area_px * ps**2 if ps is not None else "",
             "donor_mean_lifetime": donor_ref,
             "da_mean_lifetime": da_mean,
             "fret_efficiency": _fret(donor_ref, da_mean),
             "n_pixels_donor": n_pixels_donor,
             "n_pixels_da": n,
             "n_particles_donor_reference": n_ref,
-            "n_da_particles_skipped": None,
+            "n_da_particles_skipped": n_skipped,
         })
-    for row in rows:
-        row["n_da_particles_skipped"] = n_skipped
 
     status = (
         FlimFretStatus.DONOR_REFERENCE_EMPTY
@@ -464,7 +473,7 @@ def _compute_per_particle(
 def _label_particles(
     mask: np.ndarray,
     min_size: float,
-    unit: str,
+    unit: FlimFretParticleSizeUnit,
     pixel_size_um: float | None,
 ) -> tuple[np.ndarray, list[int], np.ndarray]:
     """Label 8-connected mask particles and keep those at least ``min_size``.
@@ -509,14 +518,18 @@ def _majority_cells(
     covers more of it than any single cell.
     """
     sel = labeled > 0
-    pairs, counts = np.unique(
-        np.stack([labeled[sel], cell_labels[sel].astype(np.int64)]),
-        axis=1,
-        return_counts=True,
+    cells = cell_labels[sel].astype(np.int64)
+    # One int64 key per (particle, cell) pixel: a 1-D sort is much cheaper
+    # than np.unique(axis=1) on large images, and keys still come out in
+    # (particle, cell) ascending order.
+    base = int(cells.max(initial=0)) + 1
+    keys, counts = np.unique(
+        labeled[sel].astype(np.int64) * base + cells, return_counts=True
     )
+    pids, cids = np.divmod(keys, base)
     background: dict[int, int] = {}
     best: dict[int, tuple[int, int]] = {}
-    for pid, cid, cnt in zip(pairs[0], pairs[1], counts):
+    for pid, cid, cnt in zip(pids, cids, counts):
         pid, cid, cnt = int(pid), int(cid), int(cnt)
         if cid == 0:
             background[pid] = cnt
