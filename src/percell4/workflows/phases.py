@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from percell4.workflows.run_log import RunLog
 
 from percell4.adapters.cellpose import run_cellpose
+from percell4.domain.errors import ProjectionRequiredError
 from percell4.domain.measure.grouper import GroupingResult, group_cells_gmm, group_cells_kmeans
 from percell4.domain.measure.measurer import measure_cells, measure_multichannel_with_masks
 from percell4.domain.measure.metrics import BUILTIN_METRICS
@@ -55,7 +56,7 @@ from percell4.domain.segmentation.postprocess import (
     relabel_sequential,
 )
 from percell4.io.paths import scan_files
-from percell4.store import DatasetStore
+from percell4.store import DatasetStore, source_channel_attrs
 from percell4.workflows.artifacts import write_atomic
 from percell4.workflows.failures import DatasetFailure, FailureRecord
 from percell4.workflows.models import (
@@ -97,6 +98,17 @@ def compress_one(
         return entry, None, ""
 
     plan = entry.compress_plan or {}
+    if "infile_source" in plan:
+        return _compress_infile(entry, plan)
+    if plan.get("z_project_method") == "none":
+        # The dialog used to offer "none", which never worked: project_z
+        # raised on it. Name the field instead of failing inside the importer.
+        return (
+            entry,
+            DatasetFailure.COMPRESS_FAILED,
+            "z_project_method 'none' is no longer supported; every import "
+            "projects Z. Re-add this dataset with mip, mean or sum.",
+        )
     source_dir = plan.get("source_dir", "")
     files_paths: list[str] = plan.get("files", [])
     output_path = Path(plan.get("output_path", entry.h5_path))
@@ -186,6 +198,7 @@ def compress_one(
         # binning), keeping existing single-cell runs byte-identical
         # apart from the two new /metadata keys.
         creation_bin = int(plan.get("creation_bin", 1))
+        z_step = plan.get("z_step_um")
         import_dataset(
             source_dir=source_dir or str(output_path.parent),
             output_h5=output_path,
@@ -197,6 +210,8 @@ def compress_one(
             creation_bin=creation_bin,
             tile_config=tile_config,
             flim_params=plan.get("flim_params"),
+            storage=_storage_from_plan(plan),
+            z_step_um=float(z_step) if z_step else None,
         )
     except Exception as e:
         logger.exception("compress_one failed for %s", entry.name)
@@ -205,6 +220,50 @@ def compress_one(
             DatasetFailure.COMPRESS_FAILED,
             f"{type(e).__name__}: {e}",
         )
+
+    updated = WorkflowDatasetEntry(
+        name=entry.name,
+        source=DatasetSource.H5_EXISTING,
+        h5_path=output_path,
+        channel_names=list(entry.channel_names),
+        compress_plan=None,
+    )
+    return updated, None, ""
+
+
+def _storage_from_plan(plan: dict[str, Any]):
+    """The plan's storage choice, or None for a plan saved before it existed
+    (one projection by its z method, exactly as before)."""
+    keep = plan.get("storage")
+    if not keep:
+        return None
+    from percell4.domain.io.projections import StorageChoice
+
+    return StorageChoice.parse(",".join(keep))
+
+
+def _compress_infile(
+    entry: WorkflowDatasetEntry, plan: dict[str, Any]
+) -> tuple[WorkflowDatasetEntry, DatasetFailure | None, str]:
+    """Import one in-file source recorded in ``plan`` (exactly one per entry)."""
+    output_path = Path(plan.get("output_path", entry.h5_path))
+    try:
+        from percell4.adapters import infile_scan
+        from percell4.adapters.importer import import_infile_dataset
+        from percell4.domain.io.scheme_json import source_from_dict
+
+        source = source_from_dict(plan["infile_source"])
+        import_infile_dataset(
+            source,
+            output_path,
+            infile_scan.shared_reader(),
+            z_method=plan.get("z_method", "mip"),
+            creation_bin=int(plan.get("creation_bin", 1)),
+            storage=_storage_from_plan(plan),
+        )
+    except Exception as e:
+        logger.exception("compress_one (in-file) failed for %s", entry.name)
+        return entry, DatasetFailure.COMPRESS_FAILED, f"{type(e).__name__}: {e}"
 
     updated = WorkflowDatasetEntry(
         name=entry.name,
@@ -386,6 +445,12 @@ def _postprocess_labels(
     return relabel_sequential(labels)
 
 
+def _channel_name_at(store: DatasetStore, channel_idx: int) -> str | None:
+    """The name of intensity channel ``channel_idx``, or None when unnamed."""
+    names = list(store.metadata.get("channel_names") or [])
+    return str(names[channel_idx]) if 0 <= channel_idx < len(names) else None
+
+
 def segment_one(
     store: DatasetStore,
     cfg: CellposeSettings,
@@ -420,7 +485,7 @@ def segment_one(
             image = _read_segmentation_channel_stack(store, channel_idx, n_timepoints)  # (T, H, W)
         else:
             image = _read_segmentation_channel(store, channel_idx=channel_idx)
-    except (KeyError, IndexError, ValueError) as e:
+    except (KeyError, IndexError, ValueError, ProjectionRequiredError) as e:
         logger.exception("failed to read intensity for segmentation")
         return (
             np.zeros((0, 0), dtype=np.int32),
@@ -490,7 +555,9 @@ def segment_one(
     # channel/diameter combination is a routine condition (especially
     # on dim or unusual data); the workflow has to recover from it.
     try:
-        store.write_labels(seg_name, labels)
+        store.write_labels(
+            seg_name, labels, attrs=source_channel_attrs(_channel_name_at(store, channel_idx))
+        )
     except Exception as e:
         logger.exception("failed to write /labels/%s", seg_name)
         return (
@@ -554,7 +621,10 @@ def track_one(
 
     seg_name = tracked_name or f"{raw_seg_name}_tracked"
     try:
-        store.write_labels(seg_name, built.tracked_labels)
+        store.write_labels(
+            seg_name, built.tracked_labels,
+            attrs=source_channel_attrs(store.source_channel("labels", raw_seg_name)),
+        )
         store.write_tracks(seg_name, built.lineage)
     except Exception as e:
         logger.exception("failed to write tracked segmentation %s", seg_name)
@@ -666,6 +736,8 @@ def threshold_compute_one(
                 labels = store.read_labels(seg_name, timepoint=t)
             except KeyError as e:
                 return None, DatasetFailure.THRESHOLD_ERROR, f"missing h5 key: {e}"
+            except ProjectionRequiredError as e:
+                return None, DatasetFailure.THRESHOLD_ERROR, str(e)
             grouping, _failure, _msg = _group_image_labels(image, labels, round_spec)
             if grouping is not None:
                 per_frame[t] = grouping
@@ -678,6 +750,8 @@ def threshold_compute_one(
         labels = store.read_labels(seg_name)
     except KeyError as e:
         return None, DatasetFailure.THRESHOLD_ERROR, f"missing h5 key: {e}"
+    except ProjectionRequiredError as e:
+        return None, DatasetFailure.THRESHOLD_ERROR, str(e)
     return _group_image_labels(image, labels, round_spec)
 
 
@@ -1221,7 +1295,10 @@ def _classify_and_write_cnr(
                 continue
             name = f"{round_spec.name}{suffix}"
             try:
-                store.write_mask(name, pop_mask.astype(np.uint8))
+                store.write_mask(
+                    name, pop_mask.astype(np.uint8),
+                    attrs=source_channel_attrs(round_spec.channel),
+                )
             except Exception as e:
                 logger.exception("write_mask failed for CNR population %s", name)
                 return DatasetFailure.THRESHOLD_ERROR, f"CNR population write failed ({name}): {e}"
@@ -1317,7 +1394,10 @@ def _classify_and_write_cnr_stack(
                 continue
             name = f"{round_spec.name}{suffix}"
             try:
-                store.write_mask(name, stack.astype(np.uint8))
+                store.write_mask(
+                    name, stack.astype(np.uint8),
+                    attrs=source_channel_attrs(round_spec.channel),
+                )
             except Exception as e:
                 logger.exception("write_mask failed for CNR population %s", name)
                 # Don't leave a half-written split (e.g. _low on disk, _high failed):
@@ -1456,7 +1536,9 @@ def apply_threshold_headless(
             group_dfs.append(gdf)
         combined = np.stack(mask_frames, axis=0).astype(np.uint8)  # (T, H, W)
         try:
-            store.write_mask(round_spec.name, combined)
+            store.write_mask(
+                round_spec.name, combined, attrs=source_channel_attrs(round_spec.channel)
+            )
         except Exception as e:
             logger.exception("write_mask failed")
             return DatasetFailure.THRESHOLD_ERROR, f"write_mask failed: {e}"
@@ -1498,7 +1580,9 @@ def apply_threshold_headless(
     if err:
         return DatasetFailure.THRESHOLD_ERROR, err
     try:
-        store.write_mask(round_spec.name, mask)
+        store.write_mask(
+            round_spec.name, mask, attrs=source_channel_attrs(round_spec.channel)
+        )
     except Exception as e:
         logger.exception("write_mask failed")
         return DatasetFailure.THRESHOLD_ERROR, f"write_mask failed: {e}"
@@ -2128,7 +2212,22 @@ def _measure_frame(
     return df, None, f"{len(df)} cells, {len(df.columns)} columns"
 
 
-def measure_one(
+def measure_one(store: DatasetStore, *args: Any, **kwargs: Any):
+    """Measure one dataset; see :func:`_measure_one_unlabeled`.
+
+    On a dataset that stores named projections, every row records the one it
+    was measured on in a ``projection`` column (KTD9); datasets from before
+    named projections keep exactly today's columns.
+    """
+    df, failure, msg = _measure_one_unlabeled(store, *args, **kwargs)
+    if not df.empty:
+        projection = store.resolved_projection()
+        if projection is not None:
+            df = df.assign(projection=projection)
+    return df, failure, msg
+
+
+def _measure_one_unlabeled(
     store: DatasetStore,
     round_specs: list[ThresholdingRound],
     metric_names: list[str] | None = None,

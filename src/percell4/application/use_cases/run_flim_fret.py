@@ -50,6 +50,7 @@ import numpy as np
 from skimage import measure
 
 from percell4.application.use_cases.flim_fret_discovery import (
+    lifetime_store,
     validate_pair_layers,
 )
 from percell4.store import DatasetStore
@@ -192,8 +193,8 @@ def _compute_pair(
             pair, FlimFretStatus.MISSING_LAYER, reason="; ".join(missing)
         )
 
-    donor_store = DatasetStore(pair.donor_h5)
-    da_store = DatasetStore(pair.da_h5)
+    donor_store = lifetime_store(pair.donor_h5)
+    da_store = lifetime_store(pair.da_h5)
 
     if config.per_particle:
         donor_ps = _pixel_size_um(donor_store)

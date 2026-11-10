@@ -60,6 +60,7 @@ def run_analysis(
     *,
     log: Callable[[str], None] | None = None,
     set_label: str | None = None,
+    projection: str | None = None,
 ) -> dict[str, Any]:
     """Execute a single registered analysis against one ``.h5`` file.
 
@@ -198,12 +199,14 @@ def run_analysis(
     n_timepoints = int(_meta.get("n_timepoints", 1) or 1)
     pixel_size_um = _meta.get("pixel_size_um")
     if n_timepoints <= 1:
-        arrays = load_layers(h5_path, layer_map, roles_dict)
+        arrays = load_layers(h5_path, layer_map, roles_dict, projection=projection)
         outputs = run_callable(arrays, resolved, **run_kwargs)
     else:
         per_t: list[tuple[int, dict[str, Any]]] = []
         for t in range(n_timepoints):
-            arrays_t = load_layers(h5_path, layer_map, roles_dict, timepoint=t)
+            arrays_t = load_layers(
+                h5_path, layer_map, roles_dict, timepoint=t, projection=projection
+            )
             per_t.append((t, run_callable(arrays_t, resolved, **run_kwargs)))
         outputs = _aggregate_timepoints(per_t, cls)
 

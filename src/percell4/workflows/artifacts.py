@@ -450,6 +450,7 @@ def config_to_dict(cfg: WorkflowConfig) -> dict[str, Any]:
         "existing_mask_selections": {
             k: list(v) for k, v in cfg.existing_mask_selections.items()
         },
+        "projection": cfg.projection,
     }
 
 
@@ -492,6 +493,8 @@ def config_from_dict(data: dict[str, Any]) -> WorkflowConfig:
             k: list(v)
             for k, v in dict(data.get("existing_mask_selections", {})).items()
         },
+        # Absent in pre-feature run folders → "not given" (R11 default).
+        projection=data.get("projection"),
     )
 
 

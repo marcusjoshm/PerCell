@@ -26,11 +26,78 @@ the README for the current list.
   interaction mask apply to all three regions. v7 leaves Halo pixels outside the
   interaction mask out of each mean; v8 counts them as zero. Results match the
   mask-intensity-analysis CLI (commit 9f11fa1). Presets v2 to v6 are unchanged.
+- **OME-Zarr import (September 2026).** The In-file mode of *Import
+  Dataset*, single-cell workflows and `percell-import` accept OME-Zarr
+  stores (`.zarr` / `.ome.zarr` folders), such as the IDR publishes. PerCell
+  reads them itself, without Java or Bio-Formats, and imports the
+  full-resolution level with the same z-series and projection choices as
+  other in-file data; pixel sizes and z-spacing come from the store's
+  metadata. Supported: Zarr v2 with OME-NGFF 0.4, single images and
+  bioformats2raw multi-series stores. Zarr v3 / NGFF 0.5 stores, HCS plates
+  and remote stores are listed as excluded with a reason.
+- **Z-stacks: keep the full z-series, several projections, and view in 3D
+  (September 2026).** Every import of z-stack data (the dialog's token and
+  In-file modes, single-cell workflows and `percell-import --keep`) chooses
+  what to keep: any of the max, mean and sum projections and/or the full
+  z-series (float32, inside the `.h5`), starting at max only with a size
+  estimate. Data without a Z axis imports exactly as before. A new
+  **Projection** selector in the Session bar decides what every analysis
+  tool and the viewer's channel layers read; headless commands take
+  `--projection` (default max, else the dataset's only projection) and
+  workflow runs record their projection in `run_config.json`. The Viewer
+  panel's **Show z-series** adds the stored stack to napari, lazily and to
+  scale, so napari's 2D/3D button gives Z/T sliders or a rotatable volume;
+  segmentations and masks can be repeated through Z. **Add projection** (Data
+  tab, `percell-batch-add-projection`) computes a new projection from a kept
+  z-series without re-importing. Segmentations and masks record their
+  `source_channel`, and measurements on datasets with named projections gain
+  a `projection` column. `percell-inspect` and the Data tab list projections
+  and the z-series. Datasets made before this change are unchanged: their
+  single `/intensity` reads as their one projection, whatever projection a
+  run asks for, and their measurements keep today's columns.
 
-## [0.4.2] — 2026-09-28
+- **In-file import of multi-dimensional files (September 2026).** *Import
+  Dataset* accepts a folder or individual files, reads their headers without
+  decoding pixels, and suggests a discovery mode. The new **In-file** mode
+  reads files whose channels, z-series and time points live inside one file
+  (ImageJ hyperstacks, OME-TIFF and the vendor formats Bio-Formats supports)
+  and shows a review table: one row per file series, with per-channel
+  checkboxes, a Z/T axis swap, and a *Confirm axes* step for files whose axes
+  are ambiguous. Z is projected at import (max, mean or sum); the dataset
+  records `pixel_size_um`, `z_spacing_um`, `z_projection` and the source
+  series, and `percell-inspect` shows them. The new `percell-import` command
+  does the same headlessly and can write the suggested scheme to a JSON file,
+  edit-and-replay style. Single-cell workflows accept in-file datasets.
+  Bio-Formats needs Java; PerCell downloads a Java runtime and the pinned
+  Bio-Formats 8.5.0 jar into its cache only after you agree (optional
+  `bioformats` extra; see the installation guide).
+
+- **Paper-strict wavelet filter, with levers.** The FLIM tab's Wavelet
+  Filter group gains a Method picker: *LeeLab* (the historical shrinkage;
+  see the Anscombe correction under Fixed) or *Paper (Wang 2021 BiShrink)*, a strict
+  reading of Wang et al., Biomed. Opt. Express 12(6) 3463 and its supplement
+  (`docs/reference/`). A *Show algorithm levers* toggle exposes every point
+  where the two differ — which bands feed the MAD noise estimate, the power
+  of σ in the threshold, whether the local variance divides the threshold or
+  only gates it, the regulariser under the root, the window radius, the
+  first-level basis, the Anscombe clamp order, the inverse-Anscombe flavour,
+  and whether the coarsest level is shrunk — so each can be flipped on its
+  own to see which piece moves a dataset (moving any lever relabels the
+  method *Custom*). The variant is stamped on `g_filtered` as
+  `wavelet_method` / `wavelet_params`, and Apply Wavelet recomputes when the
+  cached variant differs from the requested one. `percell4-batch-phasor`
+  takes the same choices via `--wavelet-method` and repeatable
+  `--wavelet-param KEY=VALUE`.
 
 ### Fixed
 
+- **Multi-plane TIFFs are no longer mis-imported by the token modes.** A
+  hyperstack picked up by Subdirectory, Flat or Tokenless discovery used to be
+  stored as one flat channel with no pixel size. Those modes now leave such
+  files out, with the reason "multi-plane file, import with In-file mode".
+- **The broken "none" Z-projection choice is gone.** It raised inside the
+  importer; every import now projects Z. A saved workflow plan that still
+  asks for "none" fails with a message naming the field.
 - **Batch export no longer fails when some datasets have edge-touching cells and
   others do not.** With edge cells included as a size-normalized cohort, a
   dataset that added the synthetic edge row stored `label` and `cell_id` as
@@ -40,20 +107,18 @@ the README for the current list.
   original type, and the export widens any column whose type still differs
   between datasets instead of failing the whole run.
 
-## [0.4.1] — 2026-09-11
-
-### Fixed
-
 - **The wavelet filter's Anscombe transform now follows the paper.** The
   LeeLab reference script clamps negative values *before* adding 3/8, which
   flattens every negative Fourier coordinate (`G·I` at a noisy pixel) to the
   same value, and inverts with a sixth-order rational formula that blows up
-  for small reconstructed values. The filter now uses Wang et al. 2021's
-  eq. 6 as written — clamp *after* adding 3/8 — and its literal algebraic
-  inverse `(y/2)² − 3/8`. Filtered phasors move by up to ~0.04 at noisy
-  pixels. Wavelet results cached in a dataset by an earlier version are not
-  recomputed automatically: hold Shift while clicking *Apply Wavelet Filter*
-  (or rerun `percell-batch-phasor`) to refresh them.
+  for small reconstructed values. The default (LeeLab) filter now uses the
+  paper's eq. 6 as written — clamp *after* adding 3/8 — and its literal
+  algebraic inverse `(y/2)² − 3/8`. Filtered phasors move by up to ~0.04 at
+  noisy pixels; Apply Wavelet recomputes any cached result stamped with the
+  old settings (or with none). The script's exact behaviour remains
+  reachable by moving the *Anscombe clamp* and *Inverse Anscombe* levers
+  back (`--wavelet-param anscombe_clamp=before --wavelet-param
+  inverse_anscombe=exact` on the command line).
 
 ### Changed
 

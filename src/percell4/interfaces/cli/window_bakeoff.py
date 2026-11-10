@@ -25,6 +25,8 @@ import logging
 import sys
 from pathlib import Path
 
+from percell4.interfaces.cli._projection_option import add_projection_option
+
 logger = logging.getLogger(__name__)
 
 
@@ -113,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--c", type=float, default=None, help="granule-size multiplier override.")
     parser.add_argument("--out", default=None, help="Write the full report as JSON to this path.")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable DEBUG logging.")
+    add_projection_option(parser)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING)
@@ -144,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     fields = []
     for ds in args.datasets:
         try:
-            store = DatasetStore(Path(ds))
+            store = DatasetStore(Path(ds), projection=args.projection)
             with store.open_read():
                 fields.append(
                     load_bakeoff_field(

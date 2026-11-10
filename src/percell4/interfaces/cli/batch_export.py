@@ -35,6 +35,7 @@ from percell4.application.use_cases.batch_export_images import (
     BatchExportItemResult,
     batch_export_images,
 )
+from percell4.interfaces.cli._projection_option import add_projection_option
 from percell4.io.paths import is_sidecar, scan_files
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Enable DEBUG logging.",
     )
 
+    add_projection_option(parser)
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -193,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir,
         view_bin=args.view_bin,
         progress_callback=cb,
+        projection=args.projection,
     )
 
     print(

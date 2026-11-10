@@ -175,7 +175,7 @@ Three analyses ship — `per_particle_donut`, `per_particle_multichannel`, `whol
 
 ## 5. How it stays correct
 
-**The `ViewerPort` seam makes the pipeline runnable without a display.** Because every display-touching use case takes a `ViewerPort`, swapping in `NullViewerAdapter` turns the GUI pipeline headless with no branching inside the use case — `src/percell4/interfaces/cli/run_pipeline.py` and `src/percell4/application/use_cases/batch_process_datasets.py` do exactly that. The rest of the 14 console commands stay headless by construction, never reaching for a viewer at all.
+**The `ViewerPort` seam makes the pipeline runnable without a display.** Because every display-touching use case takes a `ViewerPort`, swapping in `NullViewerAdapter` turns the GUI pipeline headless with no branching inside the use case — `src/percell4/interfaces/cli/run_pipeline.py` and `src/percell4/application/use_cases/batch_process_datasets.py` do exactly that. The rest of the 15 console commands stay headless by construction, never reaching for a viewer at all.
 
 **The test suite and the CI workflow live on the `development` branch** (see *Development documentation* below), alongside the planning and learnings material. `main` carries the software and its documentation; the machinery that verifies it is checked out with the development branch. What follows describes that suite, because its shape is part of how this codebase is built rather than an incidental detail.
 

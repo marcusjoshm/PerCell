@@ -14,6 +14,7 @@ from enum import Enum, auto
 import pandas as pd
 
 from percell4.domain.dataset import CellId, ChannelName, DatasetHandle, LayerName
+from percell4.domain.io.projections import pick_projection as _pick_projection
 
 
 class Event(Enum):
@@ -26,11 +27,13 @@ class Event(Enum):
     ACTIVE_MASK_CHANGED = auto()
     ACTIVE_CHANNEL_CHANGED = auto()
     ACTIVE_BIN_CHANGED = auto()
+    ACTIVE_PROJECTION_CHANGED = auto()
     ACTIVE_TIMEPOINT_CHANGED = auto()
     MEASUREMENTS_UPDATED = auto()
     CHANNEL_LIST_CHANGED = auto()
     SEGMENTATION_LIST_CHANGED = auto()
     MASK_LIST_CHANGED = auto()
+    PROJECTION_LIST_CHANGED = auto()
 
 
 # Callback type: no arguments, no return value
@@ -53,6 +56,7 @@ class Session:
     _active_mask: LayerName | None = field(default=None, repr=False)
     _active_channel: ChannelName | None = field(default=None, repr=False)
     _active_bin: int = field(default=1, repr=False)
+    _active_projection: str | None = field(default=None, repr=False)
     _active_timepoint: int = field(default=0, repr=False)
     # Cross-window selection is GLOBAL BY LABEL (no timepoint dimension). This is
     # correct for a TRACKED segmentation, where the label value equals the track
@@ -129,6 +133,26 @@ class Session:
         return self._active_bin
 
     @property
+    def projection_names(self) -> list[str]:
+        """The active dataset's stored projections, in display order.
+
+        Empty when no dataset is loaded or the dataset holds only a z-series.
+        """
+        if self._dataset is None:
+            return []
+        return list(self._dataset.metadata.get("projection_names", []))
+
+    @property
+    def active_projection(self) -> str | None:
+        """The projection every GUI read of intensity uses (KTD4).
+
+        Chosen on dataset change: the preferred projection (max) when stored,
+        else the first stored one; ``None`` when there is none. Every GUI
+        surface that opens a store or repository takes it from here.
+        """
+        return self._active_projection
+
+    @property
     def n_timepoints(self) -> int:
         """Number of acquisition timepoints in the active dataset (>= 1).
 
@@ -192,6 +216,7 @@ class Session:
         prev_selection = self._selection
         prev_bin = self._active_bin
         prev_timepoint = self._active_timepoint
+        prev_projection = self._active_projection
 
         self._dataset = handle
         self._selection = frozenset()
@@ -211,11 +236,13 @@ class Session:
             self._active_channel = None
             self._active_segmentation = None
             self._active_mask = None
+        self._active_projection = _pick_projection(self.projection_names)
 
         self._emit(Event.DATASET_CHANGED)
         self._emit(Event.CHANNEL_LIST_CHANGED)
         self._emit(Event.SEGMENTATION_LIST_CHANGED)
         self._emit(Event.MASK_LIST_CHANGED)
+        self._emit(Event.PROJECTION_LIST_CHANGED)
         if prev_channel != self._active_channel:
             self._emit(Event.ACTIVE_CHANNEL_CHANGED)
         if prev_segmentation != self._active_segmentation:
@@ -230,6 +257,8 @@ class Session:
             self._emit(Event.ACTIVE_BIN_CHANGED)
         if prev_timepoint != 0:
             self._emit(Event.ACTIVE_TIMEPOINT_CHANGED)
+        if prev_projection != self._active_projection:
+            self._emit(Event.ACTIVE_PROJECTION_CHANGED)
 
     def set_selection(self, ids: frozenset[CellId]) -> None:
         if ids == self._selection:
@@ -291,6 +320,20 @@ class Session:
         self._active_bin = k
         self._emit(Event.ACTIVE_BIN_CHANGED)
 
+    def set_active_projection(self, name: str | None) -> None:
+        """Choose the projection GUI reads use.
+
+        Idempotent. Raises ``ValueError`` for a name the dataset does not
+        hold (``None`` is accepted only when it holds none).
+        """
+        if name == self._active_projection:
+            return
+        names = self.projection_names
+        if name is None and names or name is not None and name not in names:
+            raise ValueError(f"projection {name!r} is not stored; the dataset holds {names}")
+        self._active_projection = name
+        self._emit(Event.ACTIVE_PROJECTION_CHANGED)
+
     def set_active_timepoint(self, t: int) -> None:
         """Set the active timepoint index (0 <= t < n_timepoints).
 
@@ -316,6 +359,7 @@ class Session:
         channel_names: list[str] | None = None,
         segmentation_names: list[str] | None = None,
         mask_names: list[str] | None = None,
+        projection_names: list[str] | None = None,
     ) -> None:
         """Update the dataset's resource inventory and emit list events.
 
@@ -339,12 +383,25 @@ class Session:
         if mask_names is not None:
             md["mask_names"] = list(mask_names)
             self._emit(Event.MASK_LIST_CHANGED)
+        if projection_names is not None:
+            # A new projection never changes the active one (like a new
+            # channel), except that a dataset gaining its first projection
+            # starts reading it.
+            md["projection_names"] = list(projection_names)
+            self._emit(Event.PROJECTION_LIST_CHANGED)
+            if self._active_projection not in projection_names:
+                picked = _pick_projection(projection_names)
+                if picked != self._active_projection:
+                    self._active_projection = picked
+                    self._emit(Event.ACTIVE_PROJECTION_CHANGED)
 
     def clear(self) -> None:
         """Reset all state. Called when closing a dataset."""
         prev_bin = self._active_bin
         prev_timepoint = self._active_timepoint
+        prev_projection = self._active_projection
         self._dataset = None
+        self._active_projection = None
         self._active_segmentation = None
         self._active_mask = None
         self._active_channel = None
@@ -358,7 +415,11 @@ class Session:
         self._emit(Event.CHANNEL_LIST_CHANGED)
         self._emit(Event.SEGMENTATION_LIST_CHANGED)
         self._emit(Event.MASK_LIST_CHANGED)
+        self._emit(Event.PROJECTION_LIST_CHANGED)
         if prev_bin != 1:
             self._emit(Event.ACTIVE_BIN_CHANGED)
         if prev_timepoint != 0:
             self._emit(Event.ACTIVE_TIMEPOINT_CHANGED)
+        if prev_projection is not None:
+            self._emit(Event.ACTIVE_PROJECTION_CHANGED)
+

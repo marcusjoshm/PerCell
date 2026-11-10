@@ -492,7 +492,10 @@ class AnalysisPanel(QWidget):
                     frames, sigma, method, value
                 )
                 mask_name = f"{method}_{channel_name}"
-                repo.write_mask(handle, mask_name, mask_stack)
+                repo.write_mask(
+                    handle, mask_name, mask_stack,
+                    attrs={"source_channel": str(channel_name)},
+                )
                 session.refresh_resource_lists(mask_names=repo.list_masks(handle))
                 session.set_active_mask(mask_name)
             except (ValueError, KeyError) as e:

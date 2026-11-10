@@ -240,6 +240,14 @@ def _build_compress_plan(
         # silently ignored on the workflow path.
         "creation_bin": int(getattr(cfg, "creation_bin", 1)),
     }
+    # Storage choice (z-stack plan U4): absent keys replay as one projection
+    # by z_project_method, the behavior of plans saved before the choice.
+    storage = getattr(cfg, "storage", None)
+    if storage is not None:
+        plan["storage"] = list(storage.tokens)
+    z_step = getattr(cfg, "z_step_um", None)
+    if z_step:
+        plan["z_step_um"] = float(z_step)
 
     # Filename-token regexes. For a tokenless (name-suffixed) import this is
     # the pattern ``discover_tokenless`` synthesized inside the CompressDialog;
@@ -285,6 +293,76 @@ def _build_compress_plan(
     return plan
 
 
+def _infile_pending_datasets(cfg: Any) -> list[_PendingDataset]:
+    """One ``tiff_pending`` entry per importable in-file source.
+
+    Each entry's plan carries exactly one serialized source plus the z
+    method, so ``compress_one`` imports that source once. Channel names come
+    from the source's channel indices, the same way the importer names them.
+    """
+    from percell4.domain.io.naming import channel_display_name
+    from percell4.domain.io.scheme_json import source_to_dict
+
+    scheme = cfg.infile_scheme
+    out: list[_PendingDataset] = []
+    for src in scheme.importable_sources:
+        if not src.channel_indices:
+            continue
+        folder = Path(cfg.output_dir) if cfg.output_dir else src.path.parent
+        output = folder / f"{src.output_name}.h5"
+        out.append(
+            _PendingDataset(
+                display_name=src.output_name,
+                source=DatasetSource.TIFF_PENDING,
+                h5_path=output,
+                channel_names=[channel_display_name(str(c)) for c in src.channel_indices],
+                compress_plan={
+                    "infile_source": source_to_dict(src),
+                    "z_method": scheme.z_method,
+                    "output_path": str(output),
+                    "creation_bin": int(getattr(cfg, "creation_bin", 1)),
+                    **(
+                        {"storage": list(scheme.storage.tokens)}
+                        if scheme.storage is not None
+                        else {}
+                    ),
+                },
+            )
+        )
+    return out
+
+
+def _java_problem() -> str | None:
+    """Why Bio-Formats cannot run right now, or None when it can. Never raises."""
+    from percell4.adapters.java_runtime import describe_java_environment
+
+    env = describe_java_environment()
+    if env.ready:
+        return None
+    return env.java.reason if not env.java.ready else env.jar.reason
+
+
+def _infile_preflight(pending: list[Any]) -> str | None:
+    """A start-blocking message when Bio-Formats entries exist but Java is missing.
+
+    OME-Zarr sources are read natively and never need Java.
+    """
+    from percell4.domain.io.infile import is_zarr_path
+
+    sources = [
+        (getattr(pd, "compress_plan", None) or {}).get("infile_source") for pd in pending
+    ]
+    if not any(src and not is_zarr_path(Path(src["path"])) for src in sources):
+        return None
+    problem = _java_problem()
+    if problem is None:
+        return None
+    return (
+        f"In-file datasets need Java and Bio-Formats: {problem} "
+        "Open Import Dataset and choose In-file to set them up."
+    )
+
+
 class _PendingDataset:
     """Lightweight record of one user-added dataset inside the dialog.
 
@@ -328,6 +406,10 @@ class _PendingDataset:
                 return ("h5", str(self.h5_path))
         # tiff_pending: the compress plan carries the identity
         plan = self.compress_plan or {}
+        infile = plan.get("infile_source")
+        if infile:
+            # One file can hold several series; each is its own dataset.
+            return ("infile", str(infile.get("path", "")), int(infile.get("series_index", 0)))
         src_dir = plan.get("source_dir", "")
         files = tuple(plan.get("files", ()))
         return ("tiff", str(src_dir), files)
@@ -543,6 +625,21 @@ class WorkflowConfigDialog(QDialog):
 
         btn_row.addStretch()
         outer.addLayout(btn_row)
+
+        # Projection every phase of the run reads intensity from (KTD6).
+        proj_row = QHBoxLayout()
+        proj_row.addWidget(QLabel("Projection:"))
+        self._projection_combo = QComboBox()
+        self._projection_combo.setToolTip(
+            "The z-projection every phase reads intensity from. Offers the "
+            "projections this run's imports keep and those its .h5 datasets "
+            "hold. Datasets imported before projections were named read their "
+            "one image whatever is chosen."
+        )
+        proj_row.addWidget(self._projection_combo)
+        proj_row.addStretch()
+        outer.addLayout(proj_row)
+        self._refresh_projection_choice()
 
         # Status line for dedupe toasts, validation hints, etc.
         self._dataset_status = QLabel("")
@@ -1693,6 +1790,25 @@ class WorkflowConfigDialog(QDialog):
         finally:
             dialog.deleteLater()
 
+        if cfg.infile_scheme is not None:
+            added, skipped = 0, []
+            for pd in _infile_pending_datasets(cfg):
+                if self._add_pending(pd):
+                    added += 1
+                else:
+                    skipped.append(f"{pd.display_name} (duplicate)")
+            if not added and not skipped:
+                self._dataset_status.setText(
+                    "No files selected in the import dialog — nothing to add."
+                )
+                return
+            self._refresh_dataset_tree()
+            self._refresh_round_channels()
+            self._refresh_column_picker()
+            self._update_start_enabled()
+            self._toast_add_result(added, skipped)
+            return
+
         selected_token_ids = sorted(cfg.selected_channels)
         layer_assignments = cfg.layer_assignments or {}
         channel_names = _derive_tiff_pending_channel_names(
@@ -1784,6 +1900,59 @@ class WorkflowConfigDialog(QDialog):
         # Keep the segmentation + mask pickers in sync with the dataset queue.
         self._refresh_segmentation_picker()
         self._refresh_mask_picker()
+        self._refresh_projection_choice()
+
+    def _projection_sources(self) -> tuple[list[str], list[str]]:
+        """``(projections on offer, names of datasets holding only a z-series)``.
+
+        A pending import offers the projections its storage choice keeps (a
+        plan without one imports into /intensity, which reads whatever is
+        chosen); an existing ``.h5`` offers its named projections.
+        """
+        from percell4.domain.io.projections import StorageChoice, ordered_projections
+
+        offered: set[str] = set()
+        zseries_only: list[str] = []
+        for pd in self._pending_datasets:
+            if pd.source is DatasetSource.H5_EXISTING:
+                try:
+                    store = DatasetStore(pd.h5_path)
+                    names = store.named_projections()
+                    if not names and not store.list_projections() and store.has_zseries():
+                        zseries_only.append(pd.display_name)
+                except Exception:  # noqa: BLE001 - an unreadable file offers nothing
+                    names = ()
+                offered.update(names)
+                continue
+            keep = (pd.compress_plan or {}).get("storage")
+            if keep:
+                choice = StorageChoice.parse(",".join(keep))
+                offered.update(choice.projections)
+                if not choice.projections:
+                    zseries_only.append(pd.display_name)
+        return list(ordered_projections(offered)), zseries_only
+
+    def _refresh_projection_choice(self) -> None:
+        """Offer the run's projections, seeded from the Session when possible."""
+        from percell4.domain.io.projections import pick_projection
+        from percell4.gui.analysis_widgets import session_projection
+
+        combo = self._projection_combo
+        current = combo.currentData()
+        offered, _zseries_only = self._projection_sources()
+        combo.blockSignals(True)
+        combo.clear()
+        if not offered:
+            combo.addItem("default (max, else each dataset's only projection)", None)
+        for name in offered:
+            combo.addItem(name, name)
+        seed = current if current in offered else session_projection(self.parent())
+        if seed not in offered:
+            seed = pick_projection(offered)
+        if seed is not None:
+            combo.setCurrentIndex(combo.findData(seed))
+        combo.setEnabled(len(offered) > 1)
+        combo.blockSignals(False)
 
     def _toast_add_result(self, added: int, skipped: list[str]) -> None:
         parts: list[str] = []
@@ -2229,6 +2398,21 @@ class WorkflowConfigDialog(QDialog):
             self._warn("Add at least one dataset before starting.")
             return None
 
+        java_problem = _infile_preflight(self._pending_datasets)
+        if java_problem is not None:
+            self._warn(java_problem)
+            return None
+
+        _offered, zseries_only = self._projection_sources()
+        if zseries_only:
+            self._warn(
+                "These datasets keep only a z-series, which is for viewing: "
+                + ", ".join(zseries_only)
+                + ". Keep a projection in their import (or add one to the "
+                ".h5), or remove them from the run."
+            )
+            return None
+
         use_existing_masks = self._mask_selection_group.isChecked()
         if not use_existing_masks and len(self._round_cards) == 0:
             self._warn(
@@ -2398,6 +2582,7 @@ class WorkflowConfigDialog(QDialog):
                 ),
                 use_existing_masks=use_existing_masks,
                 existing_mask_selections=existing_mask_selections,
+                projection=self._projection_combo.currentData(),
             )
         except ValueError as e:
             self._warn(f"Configuration invalid: {e}")

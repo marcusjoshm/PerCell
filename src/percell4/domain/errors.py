@@ -76,3 +76,93 @@ class LifCalibrationError(PercellError):
     def __init__(self, errors: list[str] | tuple[str, ...]) -> None:
         self.errors: tuple[str, ...] = tuple(errors)
         super().__init__("; ".join(self.errors))
+
+
+class ImportSchemeError(PercellError):
+    """An in-file import scheme is malformed or unsafe.
+
+    Raised when a scheme file has an unknown version, a malformed field, or an
+    output name that would escape the output directory. The message names the
+    failing field so the user can fix the scheme file by hand.
+    """
+
+
+class JavaUnavailableError(PercellError):
+    """No working Java runtime could be found or provisioned.
+
+    Raised when every candidate (the ``java_home`` setting, ``JAVA_HOME``, the
+    PerCell cache) fails its ``java -version`` probe and provisioning is not
+    possible: no consent, no network, a checksum mismatch, or a platform with
+    no pinned runtime. The message says what was tried and names the manual
+    steps, so it can be shown to the user verbatim.
+    """
+
+
+class BioformatsUnavailableError(PercellError):
+    """The pinned Bio-Formats jar is missing and could not be fetched.
+
+    Same shape as :class:`JavaUnavailableError`: the message names the
+    failure (offline, checksum mismatch, non-HTTPS URL) and the manual
+    alternative (set ``bioformats_jar`` in Advanced settings).
+    """
+
+
+class BioformatsReadError(PercellError):
+    """Bio-Formats could not read the pixel data of an in-file source.
+
+    Raised by the reader when reading planes fails: a Java exception while
+    decoding, or the reader process stopping mid-read. The message is one
+    line naming the file; the full trace goes to the log. Probing never
+    raises this; a file that cannot be probed gets an error on its record.
+    """
+
+
+class OmeZarrReadError(PercellError):
+    """The native OME-Zarr reader could not read the pixel data of a store.
+
+    Raised while reading planes: a chunk that fails to decode or has the
+    wrong size, an unreadable chunk file, or metadata that no longer parses.
+    The message names the store. Probing never raises this; a store that
+    cannot be probed gets an error on its record.
+    """
+
+
+class ImportCancelledError(PercellError):
+    """The user cancelled an in-file import before it finished.
+
+    The importer raises this after removing its temporary file, so a
+    cancelled import leaves no dataset file behind.
+    """
+
+
+class ProvisioningCancelledError(PercellError):
+    """The user cancelled a Java or Bio-Formats download.
+
+    Distinct from the unavailable errors so callers can treat it as a choice
+    rather than a failure. By the time it is raised, no partial download or
+    half-extracted runtime is left in the cache.
+    """
+
+
+class ProjectionRequiredError(PercellError):
+    """An intensity read cannot tell which z-projection to use.
+
+    Raised when a dataset holds several projections and none was chosen and
+    none is the preferred one, when the chosen projection is not stored, or
+    when the dataset holds only a z-series (it is view-only until a
+    projection is added). ``stored`` lists the projections the dataset
+    holds, so a caller can offer them; the message names them too.
+    """
+
+    def __init__(self, message: str, stored: tuple[str, ...] = ()) -> None:
+        self.stored: tuple[str, ...] = tuple(stored)
+        super().__init__(message)
+
+
+class AddProjectionError(PercellError):
+    """A projection cannot be added to this dataset.
+
+    Raised when the dataset kept no z-series to project from, or already
+    stores the requested projection. The message says which, so batch tools
+    can report it per dataset. The dataset is left unchanged.
+    """

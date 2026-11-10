@@ -34,6 +34,7 @@ import logging
 import sys
 from pathlib import Path
 
+from percell4.interfaces.cli._projection_option import add_projection_option
 from percell4.io.paths import scan_files
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Write the locked PunctaDetectorSettings JSON here when locked.",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable DEBUG logging.")
+    add_projection_option(parser)
 
     args = parser.parse_args(argv)
     logging.basicConfig(
@@ -203,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     gt_by_field = load_tier_a_csv(csv_paths)
 
-    store = DatasetStore(args.dataset)
+    store = DatasetStore(args.dataset, projection=args.projection)
     field_name = args.field_name or Path(args.dataset).stem
 
     # A round just to drive grouping + the channel reads (puncta added per grid).

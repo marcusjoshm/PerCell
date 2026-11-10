@@ -33,6 +33,7 @@ from percell4.application.use_cases.accept_threshold import AcceptThreshold
 from percell4.application.use_cases.load_dataset import LoadDataset
 from percell4.application.use_cases.measure_cells import MeasureCells
 from percell4.application.use_cases.segment_cells import SegmentCells
+from percell4.interfaces.cli._projection_option import add_projection_option
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,7 @@ def run_pipeline(
     skip_segmentation: bool = False,
     skip_threshold: bool = False,
     track: bool = False,
+    projection: str | None = None,
 ) -> PipelineResult:
     """Run the analysis pipeline headlessly through use cases.
 
@@ -84,13 +86,17 @@ def run_pipeline(
         PipelineResult with cell count, column count, and output paths.
     """
     # ── Composition root (CLI version) ──
-    repo = Hdf5DatasetRepository()
+    repo = Hdf5DatasetRepository(projection=projection)
     viewer = NullViewerAdapter()
     session = Session()
 
     # ── Load dataset ──
     load_uc = LoadDataset(repo, viewer, session)
     handle = load_uc.execute(h5_path)
+    # The Session labels measurements with its projection; make it the one
+    # the repository reads (legacy datasets list a pseudo-name instead).
+    if projection is not None and projection in session.projection_names:
+        session.set_active_projection(projection)
     logger.info(
         "Loaded: %s (%d channels)",
         handle.name,
@@ -135,7 +141,10 @@ def run_pipeline(
                 diameter=cellpose_diameter,
             )
 
-        result = segment_uc.finalize(raw_masks)
+        channel_names = handle.metadata.get("channel_names") or []
+        result = segment_uc.finalize(
+            raw_masks, source_channel=channel_names[0] if channel_names else None
+        )
         seg_name = result.seg_name
         session.set_active_segmentation(seg_name)
         logger.info(
@@ -202,7 +211,9 @@ def run_pipeline(
                 masks.append((frame > value_t).astype(np.uint8))
             mask_stack = np.stack(masks, axis=0)
             mask_name = f"{threshold_method}_{ch_name}"
-            repo.write_mask(handle, mask_name, mask_stack)
+            repo.write_mask(
+                handle, mask_name, mask_stack, attrs={"source_channel": str(ch_name)}
+            )
             session.refresh_resource_lists(mask_names=repo.list_masks(handle))
             session.set_active_mask(mask_name)
             n_pos = int(mask_stack.sum())
@@ -278,6 +289,7 @@ def main() -> int:
         help="Track cells across timepoints (time-lapse only)",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
+    add_projection_option(parser)
 
     args = parser.parse_args()
 
@@ -298,6 +310,7 @@ def main() -> int:
             skip_segmentation=args.skip_segmentation,
             skip_threshold=args.skip_threshold,
             track=args.track,
+            projection=args.projection,
         )
         print(f"Done: {result.n_cells} cells, {result.n_columns} columns")
         if result.output_csv:

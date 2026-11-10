@@ -133,9 +133,12 @@ class DilutePhaseQueueEntry(QObject):
         on_complete: Callable[[PhaseResult], None],
         on_round_complete: Callable[[str, int], None] | None = None,
         seg_name: str = "cellpose_qc",
+        projection: str | None = None,
     ) -> None:
         super().__init__()
         self._entry = entry
+        # The run's z-projection (WorkflowConfig.projection).
+        self._projection = projection
         self._dilute_settings = dilute_settings
         self._viewer_win = viewer_win
         self._data_model = data_model
@@ -185,7 +188,7 @@ class DilutePhaseQueueEntry(QObject):
             pass
 
         try:
-            self._store = DatasetStore(self._entry.h5_path)
+            self._store = DatasetStore(self._entry.h5_path, projection=self._projection)
             channel_idx = _channel_index(self._store, self._dilute_settings.channel)
             # The dilute controller is single-frame. On a time-lapse dataset
             # operate on frame 0 (read_channel requires an explicit timepoint on

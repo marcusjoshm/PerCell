@@ -34,10 +34,12 @@ class StateChange:
     mask: bool = False               # active mask layer changed
     channel: bool = False            # active channel changed
     bin: bool = False                # session view bin (active_bin) changed
+    projection: bool = False         # active projection (analysis source) changed
     timepoint: bool = False          # active timepoint (slider position) changed
     channel_list: bool = False       # available channels list changed
     segmentation_list: bool = False  # available segmentations list changed
     mask_list: bool = False          # available masks list changed
+    projection_list: bool = False    # available projections list changed
 
 
 class CellDataModel(QObject):
@@ -66,6 +68,12 @@ class CellDataModel(QObject):
         self._session.subscribe(Event.ACTIVE_MASK_CHANGED, self._on_mask_changed)
         self._session.subscribe(Event.ACTIVE_CHANNEL_CHANGED, self._on_channel_changed)
         self._session.subscribe(Event.ACTIVE_BIN_CHANGED, self._on_bin_changed)
+        self._session.subscribe(
+            Event.ACTIVE_PROJECTION_CHANGED, self._on_projection_changed
+        )
+        self._session.subscribe(
+            Event.PROJECTION_LIST_CHANGED, self._on_projection_list_changed
+        )
         self._session.subscribe(
             Event.ACTIVE_TIMEPOINT_CHANGED, self._on_timepoint_changed
         )
@@ -118,6 +126,14 @@ class CellDataModel(QObject):
     def _on_bin_changed(self) -> None:
         if not self._wiring_session:
             self.state_changed.emit(StateChange(bin=True))
+
+    def _on_projection_changed(self) -> None:
+        if not self._wiring_session:
+            self.state_changed.emit(StateChange(projection=True))
+
+    def _on_projection_list_changed(self) -> None:
+        if not self._wiring_session:
+            self.state_changed.emit(StateChange(projection_list=True))
 
     def _on_timepoint_changed(self) -> None:
         if not self._wiring_session:

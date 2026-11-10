@@ -142,6 +142,10 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
 
     # ── Effective segmentation name ───────────────────────────
 
+    def _open_store(self, path) -> DatasetStore:
+        """A store on ``path`` that reads the run's z-projection (KTD6)."""
+        return DatasetStore(path, projection=self._config.projection)
+
     def _seg_name_for(self, entry) -> str:
         """The segmentation name a dataset's phases should read/write.
 
@@ -236,7 +240,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
         if not rounds:
             return []
         try:
-            present = set(DatasetStore(entry.h5_path).list_masks())
+            present = set(self._open_store(entry.h5_path).list_masks())
         except Exception:
             logger.exception(
                 "could not list masks for %s; skipping CNR population "
@@ -297,7 +301,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
         to override.
         """
         try:
-            names = DatasetStore(entry.h5_path).list_labels()
+            names = self._open_store(entry.h5_path).list_labels()
         except Exception:
             logger.exception("could not list labels for %s", entry.name)
             return None
@@ -321,7 +325,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
         """True when the dataset has more than one acquisition timepoint."""
         try:
             return int(
-                DatasetStore(entry.h5_path).metadata.get("n_timepoints", 1) or 1
+                self._open_store(entry.h5_path).metadata.get("n_timepoints", 1) or 1
             ) > 1
         except Exception:
             logger.exception("could not read n_timepoints for %s", entry.name)
@@ -341,7 +345,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
         if seg_name.endswith("_tracked"):
             return False
         try:
-            store = DatasetStore(entry.h5_path)
+            store = self._open_store(entry.h5_path)
             n_timepoints = int(store.metadata.get("n_timepoints", 1) or 1)
         except Exception:
             logger.exception("could not read n_timepoints for %s", entry.name)
@@ -434,7 +438,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                 ):
                     try:
                         is_2d = len(
-                            DatasetStore(entry.h5_path).labels_shape(existing)
+                            self._open_store(entry.h5_path).labels_shape(existing)
                         ) == 2
                     except Exception:
                         logger.exception(
@@ -686,7 +690,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
             # success — so without this the run continues against an empty
             # dataset and fails minutes later somewhere unrelated.
             problem = validate_compressed_dataset(
-                DatasetStore(updated.h5_path),
+                self._open_store(updated.h5_path),
                 seg_channel_name=self._config.seg_channel_name,
                 round_channels=[
                     r.channel for r in self._config.thresholding_rounds
@@ -724,7 +728,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
     def _make_track_handler(self, entry):
         def handler() -> PhaseResult:
             print(f"  [track] {entry.name}...", flush=True)
-            store = DatasetStore(entry.h5_path)
+            store = self._open_store(entry.h5_path)
             raw_seg = self._seg_name_for(entry)
             tracked_name, failure, msg = track_one(store, raw_seg)
             if failure is not None:
@@ -772,7 +776,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                     return PhaseResult(success=False, message=str(e))
 
             try:
-                store = DatasetStore(entry.h5_path)
+                store = self._open_store(entry.h5_path)
             except Exception as e:
                 record_failure(
                     self._metadata,
@@ -852,7 +856,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                     return
 
             try:
-                store = DatasetStore(entry.h5_path)
+                store = self._open_store(entry.h5_path)
             except Exception as e:
                 record_failure(
                     self._metadata,
@@ -967,7 +971,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
             # Resolve the seg channel index for this dataset so the QC
             # controller loads the right intensity channel.
             try:
-                _store = DatasetStore(entry.h5_path)
+                _store = self._open_store(entry.h5_path)
                 seg_ch = self._seg_channel_idx(_store)
             except Exception:
                 seg_ch = 0
@@ -980,6 +984,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                 on_complete=_wrapped_complete,
                 channel_idx=seg_ch,
                 seg_name=self._seg_name_for(entry),
+                projection=self._config.projection,
                 cellpose_settings=self._config.cellpose,
                 edge_mode=self._config.edge_mode,
                 edge_margin_px=self._config.edge_margin_px,
@@ -1063,6 +1068,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                     on_complete=_wrapped_complete,
                     on_round_complete=_record_round_count,
                     seg_name=self._seg_name_for(entry),
+                    projection=self._config.projection,
                 )
             except Exception as e:
                 logger.exception("dilute queue entry init failed")
@@ -1098,7 +1104,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                 flush=True,
             )
             try:
-                store = DatasetStore(entry.h5_path)
+                store = self._open_store(entry.h5_path)
             except Exception as e:
                 record_failure(
                     self._metadata,
@@ -1153,7 +1159,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                 )
 
             try:
-                store = DatasetStore(entry.h5_path)
+                store = self._open_store(entry.h5_path)
             except Exception as e:
                 record_failure(
                     self._metadata,
@@ -1269,6 +1275,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                     queue_total=queue_total,
                     on_complete=_wrapped_complete,
                     seg_name=self._seg_name_for(entry),
+                    projection=self._config.projection,
                 )
             else:
                 queue_entry = ThresholdQCQueueEntry(
@@ -1281,6 +1288,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
                     queue_total=queue_total,
                     on_complete=_wrapped_complete,
                     seg_name=self._seg_name_for(entry),
+                    projection=self._config.projection,
                 )
             # Hold a reference to prevent GC.
             self._active_qc_controller = queue_entry
@@ -1297,7 +1305,7 @@ class SingleCellThresholdingRunner(BaseWorkflowRunner):
         def handler() -> PhaseResult:
             print(f"  [measure] {entry.name}...", flush=True)
             try:
-                store = DatasetStore(entry.h5_path)
+                store = self._open_store(entry.h5_path)
             except Exception as e:
                 record_failure(
                     self._metadata,

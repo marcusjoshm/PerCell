@@ -294,6 +294,8 @@ class LauncherWindow(QMainWindow):
             show_window=self._show_window,
             get_viewer_window=lambda: self._windows.get("viewer"),
             show_status=lambda msg: self.statusBar().showMessage(msg),
+            set_zseries_shown=self._set_zseries_shown,
+            set_zseries_overlay=self._set_zseries_overlay,
         )
         return self._viewer_panel
 
@@ -1112,6 +1114,10 @@ class LauncherWindow(QMainWindow):
         config = dialog.compress_config
         dialog.deleteLater()
 
+        if config.infile_scheme is not None:
+            self._run_infile_import(config)
+            return
+
         checked = [
             ds
             for ds in config.datasets
@@ -1203,6 +1209,8 @@ class LauncherWindow(QMainWindow):
                     # None when the FLIM group is unchecked, so non-FLIM
                     # imports are unaffected.
                     flim_params=config.flim_params,
+                    storage=config.storage,
+                    z_step_um=config.z_step_um,
                 )
                 completed.append(display_name)
             except Exception as e:
@@ -1227,6 +1235,131 @@ class LauncherWindow(QMainWindow):
                 self,
                 "Compression Errors",
                 f"Failed datasets:\n\n{error_text}",
+                icon=QMessageBox.Warning,
+            )
+
+    def _run_infile_import(self, config, reader=None) -> None:
+        """Import each reviewed in-file source, with per-plane progress and cancel.
+
+        Each output is written to a temp file and moved into place only when
+        complete, so a cancel or failure leaves no partial dataset. An
+        existing output is replaced as a whole; the pre-flight names the
+        segmentations and masks that would be lost.
+        """
+        from qtpy.QtWidgets import QMessageBox
+
+        from percell4.adapters.importer import import_infile_dataset
+        from percell4.domain.errors import ImportCancelledError
+
+        sources = [s for s in config.infile_scheme.importable_sources if s.channel_indices]
+        if not sources:
+            self.statusBar().showMessage("No files selected to import")
+            return
+        z_method = config.infile_scheme.z_method
+
+        def target_for(src):
+            folder = config.output_dir or src.path.parent
+            return Path(folder) / f"{src.output_name}.h5"
+
+        names = [s.output_name for s in sources]
+        clashes = sorted({n for n in names if names.count(n) > 1})
+        if clashes:
+            message_box(
+                self,
+                "Duplicate Names",
+                "More than one file would be written as:\n"
+                + "\n".join(f"• {n}.h5" for n in clashes)
+                + "\n\nLeave out all but one of each in the review table.",
+                icon=QMessageBox.Warning,
+            )
+            return
+
+        existing = [s for s in sources if target_for(s).exists()]
+        if existing:
+            lines = []
+            for src in existing[:5]:
+                layers = _derived_layer_names(target_for(src))
+                lost = f" (loses {', '.join(layers)})" if layers else ""
+                lines.append(f"• {src.output_name}.h5{lost}")
+            if len(existing) > 5:
+                lines.append(f"(+{len(existing) - 5} more)")
+            reply = message_box(
+                self,
+                "Files Exist",
+                f"{len(existing)} output file(s) already exist:\n" + "\n".join(lines)
+                + "\n\nReplace them? A replaced file loses its segmentations and masks.",
+                icon=QMessageBox.Question,
+                buttons=QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.No:
+                sources = [s for s in sources if not target_for(s).exists()]
+                if not sources:
+                    self.statusBar().showMessage("No datasets to import")
+                    return
+
+        if reader is None:
+            from percell4.adapters.infile_scan import shared_reader
+
+            reader = shared_reader()
+
+        def planes(src) -> int:
+            eff = src.effective
+            return max(1, eff.size_t if eff is not None else 1) * len(src.channel_indices)
+
+        total = sum(planes(s) for s in sources)
+        # Must stay modal: the read loop polls wasCanceled() and relies on
+        # setValue()'s modal event pump (see blocking_progress_modality).
+        progress = progress_dialog(
+            self, "Importing...", "Cancel", 0, total, modality=blocking_progress_modality()
+        )
+        progress.setMinimumDuration(0)
+        done = [0]
+
+        def on_plane(_t, _c) -> None:
+            done[0] += 1
+            progress.setValue(done[0])
+
+        completed, failed, cancelled = [], [], False
+        for i, src in enumerate(sources):
+            if progress.wasCanceled():
+                cancelled = True
+                break
+            progress.setLabelText(f"({i + 1}/{len(sources)}) {src.output_name}")
+            try:
+                import_infile_dataset(
+                    src,
+                    target_for(src),
+                    reader,
+                    z_method=z_method,
+                    creation_bin=config.creation_bin,
+                    storage=config.infile_scheme.storage,
+                    on_plane=on_plane,
+                    is_cancelled=progress.wasCanceled,
+                )
+                completed.append(src.output_name)
+            except ImportCancelledError:
+                cancelled = True
+                break
+            except Exception as e:  # noqa: BLE001 - reported per dataset, batch continues
+                failed.append((src.output_name, str(e)))
+        progress.setValue(total)
+        progress.close()
+
+        parts = []
+        if completed:
+            parts.append(f"{len(completed)} imported")
+        if failed:
+            parts.append(f"{len(failed)} failed")
+        if cancelled:
+            parts.append("cancelled")
+        self.statusBar().showMessage(f"In-file import: {', '.join(parts) or 'nothing done'}")
+        if failed:
+            message_box(
+                self,
+                "Import Errors",
+                "Failed datasets:\n\n" + "\n".join(f"• {n}: {e}" for n, e in failed),
                 icon=QMessageBox.Warning,
             )
 
@@ -1276,12 +1409,20 @@ class LauncherWindow(QMainWindow):
 
         from percell4.adapters.hdf5_store import _build_handle_metadata
         from percell4.domain.dataset import DatasetHandle
+        from percell4.domain.io.projections import pick_projection
         from percell4.store import DatasetStore
 
         store = DatasetStore(h5_path)
         if not store.exists():
             self.statusBar().showMessage(f"File not found: {h5_path}")
             return
+
+        # Every GUI read goes through the projection the Session will pick
+        # for this dataset (KTD4): the store and the repository open with it
+        # before set_dataset notifies anyone.
+        projection = pick_projection(store.list_projections())
+        store = DatasetStore(h5_path, projection=projection)
+        self._repo.set_projection(projection)
 
         # Set as current dataset for the entire app
         self._current_store = store
@@ -1293,6 +1434,12 @@ class LauncherWindow(QMainWindow):
 
         # Update Data tab info + dropdowns
         self._update_data_tab_from_store()
+
+        # A new dataset starts with its z-series hidden.
+        zview = getattr(self, "_zview", None)
+        if zview is not None:
+            zview.forget_layers()
+            zview.shown = zview.overlay = False
 
         # Show viewer and populate with data. Suppress _show_window's
         # "empty viewer -> auto-populate" safety net during the load so the
@@ -1333,11 +1480,13 @@ class LauncherWindow(QMainWindow):
 
         if view_bin is None:
             view_bin = self.data_model.session.active_bin
+        # The bin the channel layers are drawn at, for scaling their display
+        # settings when a Pixel Binning change rebuilds them.
+        self._populated_bin = int(view_bin)
 
         # Intensity existence + inventory from metadata only (no decode).
-        try:
-            store.array_shape("intensity")
-        except KeyError:
+        has_intensity = store.array_exists("intensity")
+        if not has_intensity and not store.has_zseries():
             self.statusBar().showMessage(
                 f"No intensity data in {Path(h5_path).name}"
             )
@@ -1351,6 +1500,18 @@ class LauncherWindow(QMainWindow):
         label_names = [n for n in store.list_labels() if n not in mask_set]
 
         viewer_win.clear()
+        if not has_intensity:
+            # A z-series-only dataset is view-only (R5): its labels and masks
+            # load, and the z-series shows from the Viewer panel.
+            self._populate_serial(
+                store, viewer_win, view_bin, channel_names, n_timepoints,
+                label_names, mask_names, intensity=False,
+            )
+            self.statusBar().showMessage(
+                f"{Path(h5_path).name} holds only a z-series; show it from the "
+                "Viewer panel, or add a projection to analyse it"
+            )
+            return
 
         # Native resolution (view_bin == 1) is the heavy case — decode it in
         # parallel across processes. Binned views (k > 1) are downsampled and
@@ -1369,15 +1530,20 @@ class LauncherWindow(QMainWindow):
 
     def _populate_serial(
         self, store, viewer_win, view_bin, channel_names, n_timepoints,
-        label_names, mask_names,
+        label_names, mask_names, intensity: bool = True,
     ) -> None:
-        """Read + display every layer serially (binned-view path)."""
+        """Read + display every layer serially (binned-view path).
+
+        ``intensity=False`` skips the channel images (a z-series-only
+        dataset has none).
+        """
         with store.open_read() as s:
-            intensity = s.read_array("intensity", view_bin=view_bin)
-            for name, arr in split_intensity_layers(
-                intensity, channel_names, n_timepoints
-            ):
-                viewer_win.add_image(arr, name=name)
+            if intensity:
+                image = s.read_array("intensity", view_bin=view_bin)
+                for name, arr in split_intensity_layers(
+                    image, channel_names, n_timepoints
+                ):
+                    viewer_win.add_image(arr, name=name)
             for label_name in label_names:
                 viewer_win.add_labels(
                     s.read_labels(label_name, view_bin=view_bin), name=label_name
@@ -1420,7 +1586,10 @@ class LauncherWindow(QMainWindow):
             shp, _dtype, is_ts = array_meta(h5_path, hp)
             return shp[0] if is_ts else 1
 
-        entries.append(("intensity", None, "intensity", _frames("intensity")))
+        # The selected projection's own array: the decoder opens the file
+        # itself, so it reads the path the store resolved (KTD2).
+        intensity_path = self._current_store.resolved_intensity_path()
+        entries.append(("intensity", None, intensity_path, _frames(intensity_path)))
         for ln in label_names:
             entries.append(("labels", ln, f"labels/{ln}", _frames(f"labels/{ln}")))
         for mn in mask_names:
@@ -1694,10 +1863,80 @@ class LauncherWindow(QMainWindow):
         store -- the launcher owns the store handle and the populate
         routine.
         """
+        if change.projection:
+            self._switch_projection()
         if change.bin:
             self._rebuild_viewer_for_bin_change()
+        if getattr(change, "channel_list", False):
+            self._refresh_zseries_layers()
 
-    def _rebuild_viewer_for_bin_change(self) -> None:
+    # ── z-series viewing (z-stack plan U8) ──────────────────────
+
+    def _zseries_view(self):
+        """The z-series controller of the current viewer window, or None."""
+        from percell4.gui.zseries_view import ZSeriesView
+
+        viewer_win = self._windows.get("viewer")
+        if viewer_win is None or not viewer_win._is_alive():
+            return None
+        zview = getattr(self, "_zview", None)
+        if zview is None or zview._win is not viewer_win:
+            zview = self._zview = ZSeriesView(viewer_win)
+        return zview
+
+    def _set_zseries_shown(self, shown: bool) -> None:
+        zview = self._zseries_view()
+        h5_path = getattr(self, "_current_h5_path", None)
+        if zview is None or h5_path is None:
+            return
+        zview.set_shown(shown, h5_path, self.data_model.session.active_bin)
+
+    def _set_zseries_overlay(self, overlay: bool) -> None:
+        zview = self._zseries_view()
+        h5_path = getattr(self, "_current_h5_path", None)
+        if zview is None or h5_path is None:
+            return
+        zview.set_overlay(overlay, h5_path, self.data_model.session.active_bin)
+
+    def _refresh_zseries_layers(self) -> None:
+        """A channel was added, renamed or deleted: the z-series layers bind a
+        channel position, so rebuild them from the stored z-series."""
+        zview = getattr(self, "_zview", None)
+        h5_path = getattr(self, "_current_h5_path", None)
+        if zview is None or h5_path is None or not zview.shown:
+            return
+        zview.rebuild(h5_path, self.data_model.session.active_bin)
+
+    def _reapply_zseries(self) -> None:
+        """After a rebuild cleared the viewer, show the z-series again if it was."""
+        zview = getattr(self, "_zview", None)
+        h5_path = getattr(self, "_current_h5_path", None)
+        if zview is None or h5_path is None:
+            return
+        zview.forget_layers()
+        if zview.shown:
+            zview.apply(h5_path, self.data_model.session.active_bin)
+
+    def _switch_projection(self) -> None:
+        """Read the Session's new projection everywhere, then redraw (KTD4).
+
+        Replaces the current store (a store's projection is fixed), drops the
+        repository's cached stores, then rebuilds the viewer the way a Pixel
+        Binning change does. Active channel, mask and segmentation stay.
+        """
+        from percell4.store import DatasetStore
+
+        h5_path = getattr(self, "_current_h5_path", None)
+        projection = self.data_model.session.active_projection
+        self._repo.set_projection(projection)
+        if h5_path is None or getattr(self, "_current_store", None) is None:
+            return
+        if self._current_store.projection == projection:
+            return
+        self._current_store = DatasetStore(h5_path, projection=projection)
+        self._rebuild_viewer_for_bin_change(keep_display=False)
+
+    def _rebuild_viewer_for_bin_change(self, keep_display: bool = True) -> None:
         """Tear down and re-populate every layer at the new view bin.
 
         Wrapped in viewer's ``_is_originator`` so napari's layer-list
@@ -1717,10 +1956,16 @@ class LauncherWindow(QMainWindow):
 
         session = self.data_model.session
         view_bin = session.active_bin
+        # A Pixel Binning change keeps each channel's display; a projection
+        # change resets it (max limits would clip a mean image).
+        saved = _capture_channel_display(viewer_win) if keep_display else {}
+        old_bin = getattr(self, "_populated_bin", view_bin)
 
         viewer_win._is_originator = True
         try:
             self._populate_viewer_from_store(view_bin=view_bin)
+            _restore_channel_display(viewer_win, saved, (view_bin / old_bin) ** 2)
+            self._reapply_zseries()
             # Restore active selections via napari layer selection (NOT
             # via session.set_active_*). Session's active_* fields are
             # already correct; we just need napari to reflect them.
@@ -2219,3 +2464,55 @@ class LauncherWindow(QMainWindow):
         geom = app_settings().value("launcher/geometry")
         if geom:
             self.restoreGeometry(geom)
+
+
+def _channel_layers(viewer_win) -> list:
+    """The viewer's projection (channel) image layers, no z-series views."""
+    import napari
+
+    from percell4.domain.io.layout import is_zseries_view_layer
+
+    viewer = getattr(viewer_win, "viewer", None)
+    if viewer is None:
+        return []
+    return [
+        layer for layer in viewer.layers
+        if isinstance(layer, napari.layers.Image) and not is_zseries_view_layer(layer.name)
+    ]
+
+
+def _capture_channel_display(viewer_win) -> dict[str, tuple]:
+    """``{layer name: (contrast limits, gamma, colormap)}`` of the channel layers."""
+    return {
+        layer.name: (tuple(layer.contrast_limits), layer.gamma, layer.colormap)
+        for layer in _channel_layers(viewer_win)
+    }
+
+
+def _restore_channel_display(viewer_win, saved: dict[str, tuple], scale: float) -> None:
+    """Re-apply captured display settings after a rebuild.
+
+    Limits are multiplied by ``scale``: sum-binning by k multiplies pixel
+    values by k squared, so the same limits would wash out or clip.
+    """
+    for layer in _channel_layers(viewer_win):
+        if layer.name not in saved:
+            continue
+        limits, gamma, colormap = saved[layer.name]
+        low, high = limits[0] * scale, limits[1] * scale
+        range_low, range_high = (float(x) for x in layer.contrast_limits_range)
+        layer.contrast_limits_range = (min(low, range_low), max(high, range_high))
+        layer.contrast_limits = (low, high)
+        layer.gamma = gamma
+        layer.colormap = colormap
+
+
+def _derived_layer_names(h5_path) -> list[str]:
+    """Segmentation and mask names stored in an existing dataset, for a warning."""
+    try:
+        from percell4.store import DatasetStore
+
+        store = DatasetStore(h5_path)
+        return [*store.list_labels(), *store.list_masks()]
+    except Exception:  # noqa: BLE001 - an unreadable file just shows no list
+        return []

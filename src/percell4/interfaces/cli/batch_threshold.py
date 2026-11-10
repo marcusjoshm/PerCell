@@ -32,6 +32,7 @@ import logging
 import sys
 
 from percell4.interfaces.cli._batch_report import resolve_paths
+from percell4.interfaces.cli._projection_option import add_projection_option
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Overwrite an existing /masks/<round> instead of erroring.",
     )
     parser.add_argument("--verbose", action="store_true", help="Verbose logging.")
+    add_projection_option(parser)
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
 
@@ -374,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     for idx, path in enumerate(paths):
         name = path.name
         try:
-            store = DatasetStore(path)
+            store = DatasetStore(path, projection=args.projection)
             labels = store.list_labels()
         except Exception as e:
             print(f"[{idx + 1}/{n_total}] [error] {name}: cannot open: {e}", file=sys.stderr)

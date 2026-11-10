@@ -26,6 +26,16 @@ from percell4.gui._dialog_utils import message_box, text_input
 from percell4.model import CellDataModel
 
 
+def _format_z_line(projection: str | None, spacing_um: float | None) -> str | None:
+    """Describe an in-file import's Z projection; None for token imports."""
+    if not projection:
+        return None
+    text = f"Z stack: {projection} projection"
+    if spacing_um is not None:
+        text += f", {float(spacing_um):.4g} µm apart"
+    return text
+
+
 def _format_pixel_size_lines(
     pixel_size_um: float | None, active_bin: int,
 ) -> str:
@@ -96,6 +106,19 @@ def _read_layer_bin_attrs(store, group: str) -> dict[str, int | None]:
     except Exception:
         pass
     return result
+
+
+def _format_projection_line(store) -> str:
+    """``Projections: max, mean  |  Z-series: 3 × 97 × 1024 × 1024`` (metadata only)."""
+    try:
+        names = ", ".join(store.list_projections()) or "none (add one to analyse)"
+        z = (
+            " × ".join(str(x) for x in store.zseries_shape())
+            if store.has_zseries() else "not kept"
+        )
+    except Exception:  # noqa: BLE001 - a partial file still shows the rest
+        return "Projections: —"
+    return f"Projections: {names}  |  Z-series: {z}"
 
 
 class DataPanel(QWidget):
@@ -176,6 +199,19 @@ class DataPanel(QWidget):
         chan_mgmt_row.addWidget(btn_delete_chan)
         mgmt_layout.addLayout(chan_mgmt_row)
 
+        # Projections: add max / mean / sum from the stored z-series (U9).
+        mgmt_layout.addWidget(QLabel("Projections:"))
+        proj_row = QHBoxLayout()
+        self._projection_buttons: dict[str, QPushButton] = {}
+        for name in ("max", "mean", "sum"):
+            btn = QPushButton(f"Add {name}")
+            btn.clicked.connect(lambda _=False, n=name: self._on_add_projection(n))
+            proj_row.addWidget(btn)
+            self._projection_buttons[name] = btn
+        proj_row.addStretch()
+        mgmt_layout.addLayout(proj_row)
+        self._refresh_projection_buttons()
+
         mgmt_layout.addWidget(QLabel("Description:"))
         desc_mgmt_row = QHBoxLayout()
         desc_mgmt_row.addStretch()
@@ -212,6 +248,8 @@ class DataPanel(QWidget):
         # rename/delete/metadata.
         if change.channel_list:
             self.refresh_management_combos()
+        if getattr(change, "data", False) or getattr(change, "projection_list", False):
+            self._refresh_projection_buttons()
         if change.segmentation_list:
             self._refresh_seg_combos()
             self.refresh_dataset_info()
@@ -228,6 +266,55 @@ class DataPanel(QWidget):
             # the SessionWindow SpinBox owns that.
             self.refresh_dataset_info()
             self.refresh_management_combos()
+
+    # ── Projections (z-stack plan U9) ─────────────────────────
+
+    def _refresh_projection_buttons(self) -> None:
+        """Enable Add max/mean/sum only where it can work; say why otherwise."""
+        store = self._get_store()
+        try:
+            has_zseries = store is not None and store.has_zseries()
+            stored = set(store.list_projections()) if store is not None else set()
+        except Exception:  # noqa: BLE001 - an unreadable file offers nothing
+            has_zseries, stored = False, set()
+        for name, btn in self._projection_buttons.items():
+            if store is None:
+                btn.setEnabled(False)
+                btn.setToolTip("Load a dataset first.")
+            elif name in stored:
+                btn.setEnabled(False)
+                btn.setToolTip(f"The {name} projection is already stored.")
+            elif not has_zseries:
+                btn.setEnabled(False)
+                btn.setToolTip(
+                    "The z-series was not kept for this dataset; re-import it "
+                    "keeping the z-series to add a projection."
+                )
+            else:
+                btn.setEnabled(True)
+                btn.setToolTip(
+                    f"Compute the {name} projection from the stored z-series. "
+                    "The active projection does not change."
+                )
+
+    def _on_add_projection(self, name: str) -> None:
+        from qtpy.QtWidgets import QApplication
+
+        from percell4.adapters.hdf5_store import Hdf5DatasetRepository
+        from percell4.application.use_cases.add_projection import AddProjection
+        from percell4.domain.errors import PercellError
+
+        session = self.data_model.session
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            AddProjection(Hdf5DatasetRepository(), session).execute(name)
+        except PercellError as e:
+            self._show_status(f"Could not add the {name} projection: {e}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._refresh_projection_buttons()
+        self._show_status(f"Added the {name} projection")
 
     def _refresh_seg_combos(self) -> None:
         """Re-list the Management Segmentations dropdown from the store.
@@ -363,7 +450,10 @@ class DataPanel(QWidget):
             # Shape only — read HDF5 metadata, never the array. Reading the
             # full intensity here (it ran twice per load) was the dominant
             # large-file load cost.
-            shape = store.array_shape("intensity")
+            try:
+                shape = store.array_shape("intensity")
+            except Exception:  # noqa: BLE001 - z-series only, or no image yet
+                shape = "none (z-series only)" if store.has_zseries() else "none"
             session = self.data_model.session
             meta = store.metadata
             native_shape = meta.get("native_shape")
@@ -386,6 +476,12 @@ class DataPanel(QWidget):
             pixel_size_lines = _format_pixel_size_lines(
                 pixel_size_um, active_bin,
             )
+            z_line = _format_z_line(
+                meta.get("z_projection"), meta.get("z_spacing_um"),
+            )
+            if z_line:
+                pixel_size_lines = f"{pixel_size_lines}\n{z_line}"
+            pixel_size_lines = f"{pixel_size_lines}\n{_format_projection_line(store)}"
             # Read the description in its own guard: a description that
             # fails to read must not blank the facts above it.
             if description is _UNSET:
@@ -680,31 +776,32 @@ class DataPanel(QWidget):
             # try-block below.
             slice_idx = placeholder_channel_index(name)
 
-        try:
-            intensity = store.read_array("intensity")
-        except KeyError:
-            intensity = None
-
-        if intensity is not None and slice_idx is not None:
+        if slice_idx is not None and store.array_exists("intensity"):
             # Disambiguate a leading T axis from a leading C axis via
             # n_timepoints before slicing: on (T,H,W) deleting the channel
-            # empties /intensity (never slice a timepoint); on (T,C,H,W) slice
-            # the C axis. Non-time-lapse (C,H,W)/(H,W) behavior is unchanged.
+            # empties the intensity array (never slice a timepoint); on
+            # (T,C,H,W) slice the C axis. Non-time-lapse (C,H,W)/(H,W)
+            # behavior is unchanged. Every stored projection gets the same
+            # edit.
             from percell4.domain.io.layout import plan_channel_deletion
 
             nt = int(store.metadata.get("n_timepoints", 1) or 1)
-            action, new_intensity, dims = plan_channel_deletion(
-                intensity, slice_idx, nt
-            )
-            if action == "delete":
+
+            def _drop_slice(intensity):
+                action, new_intensity, dims = plan_channel_deletion(
+                    intensity, slice_idx, nt
+                )
+                if action == "write":
+                    return new_intensity, {"dims": dims}
                 # Only empty a genuinely 2D dataset when the layer is a real
                 # channel (a ch<N> orphan on a 2D dataset must not delete it).
-                if intensity.ndim != 2 or in_metadata:
-                    store.delete_item("intensity")
-            elif action == "write":
-                store.write_array("intensity", new_intensity, attrs={"dims": dims})
-            # "noop": index past the channel axis; napari layer removal still
-            # happens below.
+                if action == "delete" and (intensity.ndim != 2 or in_metadata):
+                    return None
+                # "noop": index past the channel axis; napari layer removal
+                # still happens below.
+                return intensity, {}
+
+            store.rewrite_projections(_drop_slice)
 
         # Update channel_names if the deleted layer was in metadata.
         if in_metadata:
@@ -732,6 +829,7 @@ class DataPanel(QWidget):
                 store.delete_item(path)
             except Exception:  # noqa: BLE001
                 pass
+        store.delete_zseries_channel(name)
 
         # Drop calibration metadata for this channel — always attempt.
         try:

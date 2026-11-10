@@ -28,9 +28,8 @@ from qtpy.QtWidgets import (
 
 from percell4.adapters.torch_device import describe_torch_environment, resolve_device
 from percell4.config.advanced import (
-    AdvancedSettings,
     load_advanced_settings,
-    save_advanced_settings,
+    update_advanced_settings,
 )
 from percell4.gui import theme
 
@@ -176,7 +175,9 @@ class AdvancedPanel(QWidget):
         text = self._device.currentText().strip()
         device = text or None
 
-        save_advanced_settings(AdvancedSettings(cellpose_device=device))
+        # update, not save: a fresh AdvancedSettings would reset the Java
+        # settings stored alongside the device override.
+        update_advanced_settings(cellpose_device=device)
 
         if device is None:
             message = "Auto-detect: Cellpose will find CUDA, ROCm or MPS on its own."

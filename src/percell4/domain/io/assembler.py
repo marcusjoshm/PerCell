@@ -622,6 +622,18 @@ def stack_timepoints(planes: list[NDArray]) -> NDArray:
     return np.stack(planes, axis=0)
 
 
+def ordered_z_tokens(tokens) -> list[str]:
+    """Unique z-slice tokens in numeric order (``z2`` before ``z10``).
+
+    Numeric tokens sort by value and come first; any other token sorts after
+    them, lexically. The original strings are kept so callers can map back.
+    """
+    def key(token: str):
+        return (0, int(token), "") if token.isdigit() else (1, 0, token)
+
+    return sorted(set(tokens), key=key)
+
+
 def project_z(
     z_slices: list[NDArray] | None = None,
     method: str = "mip",

@@ -1,6 +1,6 @@
 # Command-line Tools
 
-PerCell ships 14 headless console scripts for batch operations across `.h5` datasets. All of them install on `PATH` from `pip install -e .`. The pre-0.5 `percell4-*` names still work as aliases of the same tools and will be removed in a later release.
+PerCell ships 15 headless console scripts: one imports multi-dimensional microscopy files into `.h5` datasets, and the rest run batch operations across `.h5` datasets. All of them install on `PATH` from `pip install -e .`. The pre-0.5 `percell4-*` names still work as aliases of the same tools and will be removed in a later release.
 
 The twelve batch and inspection tools documented below share these conventions (the [two development harnesses](#development-harnesses) at the end of this page are dev-time tools and follow their own, noted there):
 
@@ -29,6 +29,8 @@ Every tool also runs as a module (`python -m percell4.interfaces.cli.<module>`),
 | `percell-batch-threshold` | Run one thresholding round and write `/masks` + `/groups` back. | [↓](#percell-batch-threshold--headless-grouped-thresholding) |
 | `percell-batch-measure` | Measure existing masks and export a timestamped run folder of CSVs. | [↓](#percell-batch-measure--measure--particle-analysis--csv-export) |
 | `percell-inspect` | Print (or JSON-dump) each dataset's metadata, description, and layers. | [↓](#percell-inspect--print-dataset-metadata--layers) |
+| `percell-import` | Import multi-dimensional files (channels, z, time inside one file) through Bio-Formats. | [↓](#percell-import--import-multi-dimensional-files-and-ome-zarr-stores) |
+| `percell-batch-add-projection` | Add a max, mean or sum projection computed from a dataset's stored z-series. | [↓](#percell-batch-add-projection--add-a-projection-from-the-stored-z-series) |
 | `percell-batch-validate-puncta` | **Dev harness.** Race puncta detectors against ground truth and lock a winner. | [↓](#percell-batch-validate-puncta--race-puncta-detectors-against-ground-truth) |
 | `percell-window-bakeoff` | **Dev harness.** Score auto-window-size finders against the SG-mask IoU oracle. | [↓](#percell-window-bakeoff--score-auto-window-size-finders-against-the-sg-mask-oracle) |
 
@@ -64,6 +66,7 @@ percell-batch-cellpose-laptrack SOURCES [--output-dir DIR] [options]
 | `--no-track` | Skip tracking even for time-lapse datasets. |
 | `--quiet` | Suppress per-dataset progress lines. |
 | `--verbose`, `-v` | Enable DEBUG logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 The Cellpose defaults match the GUI Segment tab with two exceptions, so pass them explicitly when you want a headless run to reproduce an interactive one: `--cellpose-diameter` defaults to `30`, where the GUI Segment tab seeds `300`; and `--gpu` is off unless passed, where the GUI's **Use GPU** checkbox starts checked.
 
@@ -99,6 +102,7 @@ percell-batch-export PATHS --output-dir DIR [options]
 | `--quiet` | Suppress per-dataset error detail lines. Per-dataset status headers and final totals always print. |
 | `--view-bin N` | Bin factor applied to every layer at read time. Default `1` (native resolution — the established export contract). `N > 1` produces downsampled TIFFs using the same lens the GUI applies for `view_bin=N` (`sum_bin_2d` for intensity, `mode_labels` for `/labels`, `majority_vote_mask` for `/masks`). Output filenames are unchanged regardless of bin — track the value yourself (e.g. `--output-dir out_bin4/`) if you mix runs. |
 | `--verbose`, `-v` | Enable DEBUG logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 
@@ -127,6 +131,8 @@ percell-batch-phasor PATHS [options]
 |---|---|
 | `paths` | One or more `.h5` files, or directories containing `.h5` files. Directories are globbed non-recursively (`*.h5`). **Required.** |
 | `--filter-level FILTER_LEVEL` | Wavelet filter level (1..30). Default: `9`. |
+| `--wavelet-method {leelab,paper}` | Wavelet algorithm preset. `leelab` (default) is the reference `ComplexWaveletFilter.py` shrinkage with the paper's Anscombe transform (clamp after +3/8, algebraic inverse; pass `--wavelet-param anscombe_clamp=before --wavelet-param inverse_anscombe=exact` to reproduce the script to the bit); `paper` is the strict Wang et al. 2021 BiShrink (MAD from the finest-level ±45° bands, σ² threshold divided by the local signal std, 7×7 window, no regulariser, algebraic inverse Anscombe). |
+| `--wavelet-param KEY=VALUE` | Override one lever of the chosen preset (repeatable). Keys: `noise_bands` (`all`, `finest_diagonal`), `sigma_exponent` (float), `local_variance` (`gate`, `divide`), `regularize` (bool), `window_radius` (int, `0` = LeeLab rule), `biort` (`Legall`, `near_sym_a`, `near_sym_b`), `anscombe_clamp` (`before`, `after`), `inverse_anscombe` (`exact`, `algebraic`), `shrink_coarsest` (bool). The preset with any lever moved is stamped on the dataset as `custom`. |
 | `--overwrite` | Recompute channels even when `/phasor/<ch>/g` already exists. Default: skip channels with existing phasor. |
 | `--remove` | Inverse mode: delete `/phasor/<ch>/` (all of g, s, g_filtered, s_filtered, lifetime_filtered) for every channel in each dataset instead of computing. Mutually exclusive with `--overwrite`. `--filter-level` is ignored when `--remove` is set. |
 | `--quiet` | Suppress per-channel skip / error detail lines. The per-dataset summary line and final totals always print. |
@@ -138,6 +144,8 @@ Examples:
 percell-batch-phasor dish_1.h5 dish_2.h5
 percell-batch-phasor /scratch/dishes/ --filter-level 5
 percell-batch-phasor *.h5 --overwrite --quiet
+percell-batch-phasor *.h5 --wavelet-method paper
+percell-batch-phasor *.h5 --wavelet-method paper --wavelet-param regularize=true
 percell-batch-phasor /scratch/dishes/ --remove
 ```
 
@@ -391,6 +399,7 @@ percell-batch-threshold DATASETS --round-name ROUND_NAME --channel CHANNEL \
 | `--segmentation SEGMENTATION` | Existing `/labels` layer to group against. Auto-picked per dataset if omitted. |
 | `--overwrite` | Overwrite an existing `/masks/<round>` instead of erroring. |
 | `--verbose` | Verbose logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 
@@ -442,6 +451,7 @@ percell-batch-measure DATASETS... [--segmentation SEGMENTATION] [--mask MASKS] \
 | `--csv-preset {default,all}` | CSV columns: `default` (area/integrated/mean + count/total-area/mean-intensity) or `all` (every metric). |
 | `--output OUTPUT` | Parent directory for the timestamped run folder (default cwd). A new `run_<timestamp>_<id>/` subfolder is always created beneath it. |
 | `--verbose` | Verbose logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 
@@ -487,6 +497,79 @@ percell-inspect /scratch/dishes/ --json
 percell-inspect /scratch/dishes/ --grep PFA
 ```
 
+## `percell-import` — import multi-dimensional files and OME-Zarr stores
+
+Imports microscopy files whose channels, z-series and time points live inside one file — ImageJ hyperstacks, OME-TIFF, the other formats Bio-Formats reads, and OME-Zarr stores — into `.h5` datasets. Each series of each file becomes one dataset. `--keep` chooses what each dataset stores from its z-stack: any of the `max`, `mean` and `sum` projections and/or the full z-series (`zseries`, float32, for 2D and 3D viewing). The default keeps one projection by `--z-method` (max). Analysis always runs on a projection, so a dataset kept with `zseries` alone is view-only until a projection is added. Files without a Z axis ignore `--keep` and import as before. The dataset stores the pixel size, the z-spacing and what it kept, which `percell-inspect` prints.
+
+It scans the same way as the **In-file** mode of the import dialog: it reads file headers only, never pixel data, then probes the multi-plane files and prints the suggested scheme. Single-plane files are listed as excluded; import them with the dialog's Flat or Subdirectory mode. Unlike the batch tools above, its positional arguments are image files or folders, not `.h5` datasets.
+
+`--scan-only --scheme-out scheme.json` writes the suggested scheme to an editable JSON file; `--scheme scheme.json` imports exactly the sources it lists. A source whose axes are ambiguous (for example a stack with no z-spacing, which may be a time series) carries a `needs_confirmation` reason and blocks the import with exit `2` until the scheme confirms it — set `needs_confirmation` to `""`, or fix its `axis_map`.
+
+**OME-Zarr.** A `.zarr` or `.ome.zarr` folder is one source, given directly or found inside a scanned folder. PerCell reads it natively, without Java or Bio-Formats, and imports only the full-resolution level; the smaller pyramid levels are ignored. It reads Zarr v2 stores with OME-NGFF 0.4 metadata: single images and bioformats2raw stores with several series (as the IDR publishes). Pixel sizes come from the store's scale metadata and are left unset when the unit is missing. The store's channel names are shown in the scan but not applied; channels are stored as `ch0`, `ch1`, …. Zarr v3 / OME-NGFF 0.5 stores, HCS plates, remote (`https://`, S3) stores, and arrays with Zarr filters or other codecs than Blosc, Zstd, zlib, gzip and LZ4 are listed as excluded with a reason.
+
+Every other in-file format goes through Bio-Formats, which needs Java. PerCell never downloads anything unless you pass `--provision-java`, which fetches a Java runtime and the Bio-Formats jar into PerCell's per-user cache (see [installation](installation.md)). Exit codes: `0` done, `1` Java unavailable, an import failed or an output exists without `--overwrite`, `2` usage error, nothing importable, or a source needs confirmation.
+
+```bash
+percell-import [SOURCES ...] [--output-dir DIR] [--scan-only] [--scheme-out PATH]
+               [--scheme PATH] [--z-method {mip,mean,sum}] [--keep LIST]
+               [--z-step UM] [--overwrite] [--provision-java] [--json]
+```
+
+| Option | Purpose |
+|---|---|
+| `sources` | Image files, OME-Zarr stores or folders to scan (folders are not recursive; a `.zarr` folder is one store). Omit when using `--scheme`. |
+| `--output-dir DIR` | Folder for the `.h5` outputs, one per source, named after the file (and series). Required unless `--scan-only`. |
+| `--scan-only` | Print the suggested scheme and import nothing. |
+| `--scheme-out PATH` | Write the scheme to a JSON file you can edit and replay. |
+| `--scheme PATH` | Import the sources listed in this scheme file instead of scanning. |
+| `--z-method {mip,mean,sum}` | Z projection for a scan (default `mip`). A scheme file keeps its own. `sum` is not comparable across files with different z-counts. Ignored when `--keep` is given. |
+| `--keep LIST` | What to store from each z-stack, comma-separated: any of `max`, `mean`, `sum` and `zseries`. The full z-series costs about 4 bytes per voxel before compression (a 3 × 97 × 1024 × 1024 stack is about 1.2 GB). Overrides a scheme file's own choice and is written to `--scheme-out`. |
+| `--z-step UM` | Z step in µm to record when a file carries none (otherwise 3D renders cube voxels). |
+| `--overwrite` | Replace existing `.h5` outputs as a whole (their segmentations and masks are lost). |
+| `--provision-java` | Download Java and Bio-Formats into the PerCell cache before scanning. |
+| `--json` | Print the scheme (and the imported paths) as JSON instead of text. |
+
+Examples:
+
+```bash
+# See what a folder of stacks would become, and keep the scheme
+percell-import /data/stacks/ --scan-only --scheme-out scheme.json
+
+# Import exactly what the (edited) scheme lists
+percell-import --scheme scheme.json --output-dir /data/h5/
+
+# First run on a machine without Java
+percell-import stack_01.tif --output-dir /data/h5/ --provision-java
+
+# An OME-Zarr store from the IDR: no Java needed
+percell-import /data/idr0168/cell_01.zarr --output-dir /data/h5/ --keep max,zseries
+
+# Keep the full z-series for 3D viewing, plus max and mean projections
+percell-import stack_01.tif --output-dir /data/h5/ --keep max,mean,zseries
+```
+
+## `percell-batch-add-projection` — add a projection from the stored z-series
+
+Adds a `max`, `mean` or `sum` projection to datasets that were imported keeping their full z-series (`percell-import --keep ...,zseries`, or **Full z-series** in the import dialog), so you never need to re-import to analyse a different projection. The projection is computed plane by plane from the stored z-series, at the dataset's creation bin, and written in one step: a failure or interruption leaves the dataset unchanged. A z-series-only dataset becomes analysable once it has a projection. The launcher's Data tab offers the same action (**Add projection**).
+
+A dataset that kept no z-series, or already stores the projection, is reported as skipped and the batch continues. Exit codes: `0` at least one dataset gained the projection, `1` none did, `2` usage error.
+
+```bash
+percell-batch-add-projection PATHS ... --projection {max,mean,sum}
+```
+
+| Option | Purpose |
+|---|---|
+| `paths` | `.h5` files or folders of them (not recursive). |
+| `--projection {max,mean,sum}` | The projection to add. Required. |
+
+Example:
+
+```bash
+# Every dataset in the folder gains a mean projection
+percell-batch-add-projection /data/h5/ --projection mean
+```
+
 ## Dataset descriptions
 
 Every `.h5` dataset can carry one free-text **description** — the sample, how it was prepared, the experimental condition, or anything else that makes the dataset recognisable weeks later. It is stored inside the file, so it survives copying and moving, and it is the answer to "which of these twelve dishes am I looking at?" when the filename no longer tells you.
@@ -501,7 +584,7 @@ Three surfaces read and write it:
 
 ## Development harnesses
 
-Two of the fourteen console scripts are **development and validation harnesses, not analysis commands**. They install on `PATH` alongside everything else — which is why they are documented here rather than left to be discovered by accident — but they answer method-development questions ("which detector should this project trust?", "what multiplier should the auto-window finder use?") rather than producing measurements for a paper. Nothing you would run over a folder of dishes on a Friday night.
+Two of the fifteen console scripts are **development and validation harnesses, not analysis commands**. They install on `PATH` alongside everything else — which is why they are documented here rather than left to be discovered by accident — but they answer method-development questions ("which detector should this project trust?", "what multiplier should the auto-window finder use?") rather than producing measurements for a paper. Nothing you would run over a folder of dishes on a Friday night.
 
 They exist because the choice of a detector and of a window-size heuristic are the two places where an ad-hoc decision would silently propagate into every downstream number. Turning both choices into a scored, reproducible race — against exhaustively hand-labeled ground truth in one case and an IoU oracle in the other — is what lets the project state a detector benchmark instead of an opinion. The puncta harness below is how that benchmark was produced (see `docs/methods/headless-puncta-thresholding.md`).
 
@@ -542,6 +625,7 @@ percell-batch-validate-puncta DATASET --gt-dir DIR --channel CHANNEL [options]
 | `--beta BETA` | F-beta beta (recall weight). Default: `2.0`. |
 | `--out OUT` | Write the locked `PunctaDetectorSettings` JSON here when a method locks. |
 | `--verbose`, `-v` | Enable DEBUG logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 
@@ -588,6 +672,7 @@ percell-window-bakeoff DATASETS --channel CHANNEL [options]
 | `--c C` | Override the `granule-size` finder's multiplier `c` — the calibration knob. |
 | `--out OUT` | Write the full report (oracles, IoU/recall curves, per-field scores, ranking) as JSON to this path. |
 | `--verbose`, `-v` | Enable DEBUG logging. |
+| `--projection {max,mean,sum}` | Z-projection to read intensity from. Default: `max` when the dataset holds it, else its only projection. A dataset holding several projections and no `max` fails with a message naming them until you pass this; the other datasets still run. Datasets imported before projections were named read their one image either way. |
 
 Examples:
 

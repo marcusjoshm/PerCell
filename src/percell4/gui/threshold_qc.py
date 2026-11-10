@@ -39,6 +39,7 @@ from percell4.config import viewer_presets as vp
 from percell4.gui import theme
 from percell4.gui.plot_axes import disable_si_prefix
 from percell4.gui.settings import app_settings
+from percell4.store import source_channel_attrs
 
 logger = logging.getLogger(__name__)
 
@@ -829,7 +830,9 @@ class ThresholdQCController(QObject):
         if self._persist_round_outputs:
             # Save mask to HDF5
             if self._store is not None:
-                self._store.write_mask(self._mask_name, combined)
+                self._store.write_mask(
+                    self._mask_name, combined, attrs=source_channel_attrs(self._channel)
+                )
 
                 # Save group mapping for persistence across re-measurement
                 col_name = f"group_{self._channel}_{self._metric}"

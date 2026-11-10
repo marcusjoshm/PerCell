@@ -89,6 +89,28 @@ def read_tiff(filepath: str | Path) -> dict[str, Any]:
     return {"array": img, "metadata": metadata}
 
 
+_MICRON_UNITS = {"micron", "microns", "um", "µm", "µm", "\\u00B5m"}
+
+
+def _imagej_z_spacing_um(imagej: dict | None) -> float | None:
+    """The ImageJ ``spacing`` (z step) in µm, or None when absent or not in µm.
+
+    ImageJ writes ``spacing`` in the file's ``unit``; a file with no unit is
+    taken as µm, the ImageJ default for calibrated microscopy.
+    """
+    if not imagej:
+        return None
+    spacing = imagej.get("spacing")
+    unit = imagej.get("unit")
+    if unit is not None and str(unit).strip().lower() not in _MICRON_UNITS:
+        return None
+    try:
+        value = float(spacing)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def read_tiff_metadata(filepath: str | Path) -> dict[str, Any]:
     """Read only TIFF metadata without loading pixel data."""
     import tifffile
@@ -102,6 +124,9 @@ def read_tiff_metadata(filepath: str | Path) -> dict[str, Any]:
             px = _pixel_size_um_from_tags(page)
             if px is not None:
                 metadata["pixel_size_um"] = px
+            z_spacing = _imagej_z_spacing_um(tif.imagej_metadata)
+            if z_spacing is not None:
+                metadata["z_spacing_um"] = z_spacing
     except Exception:
         pass
     return metadata

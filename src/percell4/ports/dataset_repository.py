@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -201,6 +202,39 @@ class DatasetRepository(Protocol):
         attrs: dict[str, Any] | None = None,
     ) -> None:
         """Write a numpy array at an arbitrary HDF5 path."""
+        ...
+
+    def list_projections(self, handle: DatasetHandle) -> list[str]:
+        """Names of the dataset's stored projections, in display order."""
+        ...
+
+    def add_projection(
+        self,
+        handle: DatasetHandle,
+        name: str,
+        *,
+        on_plane: Callable[[int, int], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> None:
+        """Project the stored z-series into projection ``name``.
+
+        Raises :class:`~percell4.domain.errors.AddProjectionError` when there
+        is no z-series or ``name`` is already stored; the dataset is then
+        unchanged, as it is after a cancel.
+        """
+        ...
+
+    def rewrite_projections(
+        self,
+        handle: DatasetHandle,
+        fn: Callable[[NDArray | None], tuple[NDArray, dict[str, Any]] | None],
+    ) -> int:
+        """Apply one channel edit to every stored intensity projection.
+
+        ``fn`` gets each projection (or the legacy ``/intensity``, or ``None``
+        on a dataset with neither) and returns the new array with its attrs,
+        or ``None`` to delete it. Returns the number of arrays rewritten.
+        """
         ...
 
     def read_array(

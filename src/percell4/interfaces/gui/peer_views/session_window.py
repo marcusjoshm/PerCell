@@ -21,6 +21,7 @@ from qtpy.QtWidgets import (
     QLabel,
     QMainWindow,
     QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -31,8 +32,10 @@ from percell4.model import CellDataModel
 _GEOMETRY_KEY = "session_window/geometry"
 _PIN_KEY = "session_window/pin_on_top"
 _NO_DATASET_TEXT = "(no dataset)"
-_DEFAULT_WIDTH = 720
-_DEFAULT_HEIGHT = 80
+# Two rows (dataset / channel / mask / pin, then segmentation / pixel
+# binning / projection) keep the window narrow enough for small screens.
+_DEFAULT_WIDTH = 640
+_DEFAULT_HEIGHT = 96
 
 
 class SessionWindow(QMainWindow):
@@ -65,6 +68,12 @@ class SessionWindow(QMainWindow):
                 Event.ACTIVE_BIN_CHANGED, self._on_active_bin_changed
             ),
             self._session.subscribe(
+                Event.ACTIVE_PROJECTION_CHANGED, self._on_active_projection_changed
+            ),
+            self._session.subscribe(
+                Event.PROJECTION_LIST_CHANGED, self._refresh_projection_combo
+            ),
+            self._session.subscribe(
                 Event.CHANNEL_LIST_CHANGED, self._refresh_channel_combo
             ),
             self._session.subscribe(
@@ -82,9 +91,17 @@ class SessionWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
-        row = QHBoxLayout(central)
-        row.setContentsMargins(10, 6, 10, 6)
+        rows = QVBoxLayout(central)
+        rows.setContentsMargins(10, 6, 10, 6)
+        rows.setSpacing(4)
+        row = QHBoxLayout()
         row.setSpacing(12)
+        rows.addLayout(row)
+        # Second row: segmentation, pixel binning and projection. One row
+        # holding every selector was wider than a laptop screen.
+        row2 = QHBoxLayout()
+        row2.setSpacing(12)
+        rows.addLayout(row2)
 
         # Dataset name header (left).
         self._dataset_label = QLabel(_NO_DATASET_TEXT)
@@ -107,19 +124,18 @@ class SessionWindow(QMainWindow):
         self._mask_combo.currentTextChanged.connect(self._on_mask_combo_changed)
         row.addWidget(self._mask_combo)
 
-        # Segmentation selector.
-        row.addSpacing(6)
-        row.addWidget(QLabel("Segmentation:"))
+        # Segmentation selector (second row).
+        row2.addWidget(QLabel("Segmentation:"))
         self._seg_combo = QComboBox()
         self._seg_combo.setMinimumWidth(140)
         self._seg_combo.currentTextChanged.connect(self._on_seg_combo_changed)
-        row.addWidget(self._seg_combo)
+        row2.addWidget(self._seg_combo)
 
         # Pixel-binning selector. The canonical (and only) Selector for
         # session.active_bin. DataPanel mirrors the value display but
         # never writes it (consolidate-canonical-state).
-        row.addSpacing(6)
-        row.addWidget(QLabel("Pixel Binning:"))
+        row2.addSpacing(6)
+        row2.addWidget(QLabel("Pixel Binning:"))
         self._bin_spin = QSpinBox()
         self._bin_spin.setRange(1, 16)
         self._bin_spin.setValue(1)
@@ -133,7 +149,26 @@ class SessionWindow(QMainWindow):
             "1 for no binning. Resets to 1 when you switch datasets."
         )
         self._bin_spin.valueChanged.connect(self._on_bin_spin_changed)
-        row.addWidget(self._bin_spin)
+        row2.addWidget(self._bin_spin)
+
+        # Projection selector: which stored z-projection every analysis tool
+        # and the viewer's channel layers read (the canonical Selector for
+        # session.active_projection). Empty for a z-series-only dataset.
+        row2.addSpacing(6)
+        row2.addWidget(QLabel("Projection:"))
+        self._projection_combo = QComboBox()
+        self._projection_combo.setMinimumWidth(90)
+        self._projection_combo.setToolTip(
+            "The z-projection that analysis and the viewer's channel layers "
+            "read. Resets to max (or the first stored projection) when you "
+            "switch datasets. Empty when the dataset holds only a z-series: "
+            "add a projection to analyse it."
+        )
+        self._projection_combo.currentTextChanged.connect(
+            self._on_projection_combo_changed
+        )
+        row2.addWidget(self._projection_combo)
+        row2.addStretch()
 
         row.addStretch()
 
@@ -156,6 +191,7 @@ class SessionWindow(QMainWindow):
         self._refresh_mask_combo()
         self._refresh_seg_combo()
         self._refresh_bin_spin()
+        self._refresh_projection_combo()
 
     def _refresh_dataset_header(self) -> None:
         ds = self._session.dataset
@@ -215,6 +251,13 @@ class SessionWindow(QMainWindow):
             self._seg_combo, self._seg_names(), self._session.active_segmentation
         )
 
+    def _refresh_projection_combo(self) -> None:
+        names = self._session.projection_names
+        self._populate_combo(
+            self._projection_combo, names, self._session.active_projection
+        )
+        self._projection_combo.setEnabled(bool(names))
+
     def _refresh_bin_spin(self) -> None:
         """Sync the SpinBox to ``session.active_bin`` without firing the
         valueChanged echo (which would re-write Session)."""
@@ -268,6 +311,17 @@ class SessionWindow(QMainWindow):
         if self._bin_spin.value() != self._session.active_bin:
             self._refresh_bin_spin()
 
+    def _on_active_projection_changed(self) -> None:
+        if self._loading:
+            return
+        active = self._session.active_projection or ""
+        if self._projection_combo.currentText() != active:
+            self._loading = True
+            try:
+                self._projection_combo.setCurrentText(active)
+            finally:
+                self._loading = False
+
     # ── Combo change → Session write ────────────────────────────────
 
     def _on_channel_combo_changed(self, text: str) -> None:
@@ -285,6 +339,11 @@ class SessionWindow(QMainWindow):
         if self._loading:
             return
         self.data_model.set_active_segmentation(text or None)
+
+    def _on_projection_combo_changed(self, text: str) -> None:
+        if self._loading or not text:
+            return
+        self._session.set_active_projection(text)
 
     def _on_bin_spin_changed(self, value: int) -> None:
         if self._loading:
@@ -339,6 +398,24 @@ class SessionWindow(QMainWindow):
             self.restoreGeometry(geom)
         else:
             self.resize(_DEFAULT_WIDTH, _DEFAULT_HEIGHT)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self) -> None:
+        """Keep the window within the screen: a geometry saved when the
+        window was wider (or on a larger monitor) must not come back off-screen."""
+        screen = self.screen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        width = min(self.width(), available.width())
+        height = min(self.height(), available.height())
+        if (width, height) != (self.width(), self.height()):
+            self.resize(width, height)
+        if not available.contains(self.frameGeometry()):
+            self.move(
+                max(available.left(), min(self.x(), available.right() - width)),
+                max(available.top(), min(self.y(), available.bottom() - height)),
+            )
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
