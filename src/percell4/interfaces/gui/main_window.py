@@ -80,6 +80,9 @@ class LauncherWindow(QMainWindow):
         # Holds the active dilute phase mask workflow panel (interactive
         # single-dataset workflow). Cleared in _on_dilute_workflow_finished.
         self._active_dilute_workflow_panel = None
+        # Holds the open AnalyzeIt review window (standalone, like the
+        # dilute phase panel). Cleared in _on_analyzeit_review_closed.
+        self._active_analyzeit_review = None
 
         # Unified model state change handler
         self.data_model.state_changed.connect(self._on_state_changed)
@@ -444,6 +447,15 @@ class LauncherWindow(QMainWindow):
         )
         workflows_layout.addWidget(self._btn_phasor_masks_workflow)
 
+        self._btn_analyzeit_review = QPushButton("AnalyzeIt review")
+        self._btn_analyzeit_review.setToolTip(
+            "Review a stop of an AnalyzeIt order: see each field's result, circle "
+            "problems and correct regions, add words, then Okay or Send back. "
+            "Opens an order folder."
+        )
+        self._btn_analyzeit_review.clicked.connect(self._on_open_analyzeit_review)
+        workflows_layout.addWidget(self._btn_analyzeit_review)
+
         layout.addWidget(workflows_group)
 
         layout.addStretch()
@@ -782,6 +794,65 @@ class LauncherWindow(QMainWindow):
         panel.show()
         panel.raise_()
         panel.activateWindow()
+
+    def _on_open_analyzeit_review(self) -> None:
+        """Ask for an AnalyzeIt order folder and open its review."""
+        if self.is_workflow_locked:
+            self.statusBar().showMessage(
+                "A workflow is already running — finish or cancel it first."
+            )
+            return
+        chosen = existing_directory(self, "Open an AnalyzeIt order folder")
+        if chosen:
+            self.open_analyzeit_review(Path(chosen))
+
+    def open_analyzeit_review(self, order: Path) -> bool:
+        """Open the AnalyzeIt review on ``order``. False when it cannot open."""
+        if self.is_workflow_locked:
+            self.statusBar().showMessage(
+                "A workflow is already running — finish or cancel it first."
+            )
+            return False
+        order = Path(order)
+        if not (order / "status.json").is_file():
+            message_box(
+                self,
+                "Not an AnalyzeIt order",
+                f"{order} has no status.json, so it is not an AnalyzeIt order folder.",
+                icon=QMessageBox.Warning,
+            )
+            return False
+        from percell4.gui.workflows.analyzeit_review.window import open_review
+
+        try:
+            window = open_review(order, self.get_viewer_window(), launcher=self)
+        except Exception as e:
+            logger.exception("failed to open the AnalyzeIt review")
+            self.set_workflow_locked(False)
+            message_box(
+                self,
+                "AnalyzeIt review error",
+                f"Could not open the review:\n\n{e}",
+                icon=QMessageBox.Warning,
+            )
+            return False
+        self._active_analyzeit_review = window
+        window.review_closed.connect(self._on_analyzeit_review_closed)
+        return True
+
+    def _on_analyzeit_review_closed(self) -> None:
+        """The review window closed itself; drop the reference that kept it alive."""
+        self._active_analyzeit_review = None
+
+    def _close_analyzeit_review(self) -> None:
+        """Tear down an open review. Safe to call when none is open, and twice."""
+        window = self._active_analyzeit_review
+        self._active_analyzeit_review = None
+        if window is not None:
+            try:
+                window.shutdown()
+            except Exception:
+                logger.exception("AnalyzeIt review teardown raised")
 
     def _on_dilute_workflow_finished(self) -> None:
         """Common teardown for Done / Cancel / clean-error completion."""
@@ -2450,6 +2521,7 @@ class LauncherWindow(QMainWindow):
             except Exception:
                 logger.exception("failed to propagate cancel to runner")
 
+        self._close_analyzeit_review()
         self._save_geometry()
         for window in self._windows.values():
             window.close()

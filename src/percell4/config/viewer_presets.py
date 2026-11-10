@@ -219,3 +219,19 @@ FLIM_LIFETIME_COLORMAP: Final[str] = "turbo"
 FLIM_LIFETIME_BLENDING: Final[str] = "additive"
 FLIM_LIFETIME_OPACITY: Final[float | None] = None
 FLIM_LIFETIME_CONTRAST_OVERRIDE: Final[tuple[float, float] | None] = None
+
+
+# ── AnalyzeIt review (percell4.gui.workflows.analyzeit_review) ──
+# One shapes layer holds Joshua's circles; a problem circle and a correct
+# circle differ by edge colour, and the review window shows the legend.
+ANALYZEIT_REVIEW_LAYER_PREFIX: Final[str] = "AnalyzeIt · "
+ANALYZEIT_REVIEW_PROBLEM_COLOR: Final[str] = "#ff4d4d"
+ANALYZEIT_REVIEW_CORRECT_COLOR: Final[str] = "#4dd2ff"
+ANALYZEIT_REVIEW_PREVIOUS_COLOR: Final[str] = "#b0b0b0"
+ANALYZEIT_REVIEW_EDGE_WIDTH: Final[float] = 2.0
+ANALYZEIT_REVIEW_FACE_COLOR: Final[tuple[float, ...]] = (0.0, 0.0, 0.0, 0.0)
+# Label layers are shown as outlines only (the review has no label editing).
+ANALYZEIT_REVIEW_OUTLINE_WIDTH: Final[int] = 1
+ANALYZEIT_REVIEW_LABELS_OPACITY: Final[float] = 0.9
+ANALYZEIT_REVIEW_REMOVED_OPACITY: Final[float] = 0.5
+ANALYZEIT_REVIEW_MESSAGE_COLOR: Final[str] = "yellow"

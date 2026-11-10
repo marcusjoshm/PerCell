@@ -5,7 +5,9 @@ Creates the QApplication, CellDataModel, and LauncherWindow.
 
 from __future__ import annotations
 
+import argparse
 import sys
+from pathlib import Path
 
 from qtpy.QtCore import Qt
 from qtpy.QtGui import QIcon, QPixmap
@@ -35,8 +37,22 @@ def _make_splash() -> QSplashScreen:
     return splash
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """The command line. Unknown arguments are left for Qt."""
+    parser = argparse.ArgumentParser(prog="percell4", add_help=True)
+    parser.add_argument(
+        "--analyzeit-review",
+        metavar="ORDER_FOLDER",
+        type=Path,
+        help="Open the review of an AnalyzeIt order folder once PerCell is up.",
+    )
+    known, _unknown = parser.parse_known_args(argv)
+    return known
+
+
+def main(argv: list[str] | None = None) -> None:
     """Launch the PerCell4 GUI application."""
+    args = parse_args(sys.argv[1:] if argv is None else argv)
     # A frozen app must hand spawned children (the Bio-Formats reader, the
     # parallel HDF5 decoders) to their worker instead of relaunching the GUI.
     import multiprocessing
@@ -78,6 +94,10 @@ def main() -> None:
     # Dismiss the splash once the launcher is up; finish() keeps the splash on
     # top until the target window is ready to be shown.
     splash.finish(launcher)
+
+    # Started by `analyzeit review`: open the order's review straight away.
+    if args.analyzeit_review is not None:
+        launcher.open_analyzeit_review(args.analyzeit_review)
 
     # Windows-only: warn if the MSVC Redistributable is too old for PyTorch.
     # Silently passes on macOS/Linux.
