@@ -52,7 +52,12 @@ from percell4.config import viewer_presets as vp
 from percell4.gui import theme
 from percell4.gui._dialog_utils import make_freestanding, message_box, wrap_in_scroll
 from percell4.gui.workflows.analyzeit_review.controller import ReviewController
-from percell4.workflows.analyzeit_review.session import Circle, FieldImages, ReviewSession
+from percell4.workflows.analyzeit_review.session import (
+    Circle,
+    FieldImages,
+    ReviewSession,
+    bundle_notes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -578,11 +583,7 @@ class ReviewWindow(QWidget):
         if repairs:
             notes.append("Repairs since the last stop: " + "; ".join(
                 _repair_in_words(r) for r in repairs))
-        if bundle.get("send_back_count"):
-            notes.append(f"Sent back {bundle['send_back_count']} time(s) so far.")
-        for key in ("note_after_send_backs", "recipe_drift"):
-            if bundle.get(key):
-                notes.append(str(bundle[key]))
+        notes.extend(bundle_notes(bundle))
         self.notes.setText("\n".join(notes))
         self.notes.setVisible(bool(notes))
 

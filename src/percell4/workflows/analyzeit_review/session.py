@@ -525,3 +525,24 @@ def load_field_images(
     if layer_names.get("removed") in available:
         removed = np.asarray(store.read_labels(layer_names["removed"]))
     return FieldImages(name, channels, labels, removed)
+
+
+def bundle_notes(bundle: Mapping[str, Any]) -> list[str]:
+    """The lines the window shows above a bundle: send-backs, what a redo did, drift."""
+    notes = []
+    count = bundle.get("send_back_count") or 0
+    if count:
+        notes.append(f"Sent back {count} time(s) so far.")
+    summary = bundle.get("redo_summary")
+    if summary:
+        notes.append(str(summary))
+    elif bundle.get("note_after_send_backs") is True:
+        # An older AnalyzeIt sends only the flag; say what it means rather than "True".
+        notes.append(
+            "This step has been sent back three times or more. If it is not coming right, "
+            "send it back with the not coming right mark."
+        )
+    drift = bundle.get("recipe_drift")
+    if drift:
+        notes.append(str(drift))
+    return notes

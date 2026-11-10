@@ -21,6 +21,7 @@ from percell4.workflows.analyzeit_review.session import (
     AnswerRefusedError,
     CircleRefusedError,
     ReviewSession,
+    bundle_notes,
 )
 
 NOW = datetime(2026, 11, 10, 21, 0, 0, tzinfo=UTC)
@@ -323,3 +324,20 @@ def test_the_clock_stops_after_a_minute_without_input():
     clock.tick(NOW + timedelta(seconds=305), active=True)
     assert clock.active_seconds() == 65
     assert len(clock.export()) == 2
+
+
+def test_the_notes_show_what_a_redo_did_and_never_a_bare_flag():
+    bundle = {
+        "send_back_count": 1,
+        "note_after_send_backs": False,
+        "redo_summary": "1 of 1 circled region has new outlines.",
+        "recipe_drift": None,
+    }
+    assert bundle_notes(bundle) == [
+        "Sent back 1 time(s) so far.",
+        "1 of 1 circled region has new outlines.",
+    ]
+    older = {"send_back_count": 3, "note_after_send_backs": True}
+    notes = bundle_notes(older)
+    assert "True" not in notes and "not coming right" in notes[-1]
+    assert bundle_notes({}) == []
