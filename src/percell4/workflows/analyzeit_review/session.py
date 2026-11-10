@@ -221,6 +221,11 @@ class ReviewSession:
         self.previous_circles: list[dict[str, Any]] = list(
             self.bundle.get("previous_circles") or []
         )
+        # The final review shows the spots left out, so they can be brought back.
+        for spot in self.bundle.get("left_out") or []:
+            self.previous_circles.extend(
+                {**circle, "outcome": "left_out"} for circle in spot.get("circles") or []
+            )
         self.words = ""
         self.words_field: str | None = None
         self.not_coming_right = False
@@ -546,3 +551,18 @@ def bundle_notes(bundle: Mapping[str, Any]) -> list[str]:
     if drift:
         notes.append(str(drift))
     return notes
+
+
+OUTCOME_WORDS = {
+    "replaced": "replaced",
+    "unchanged": "unchanged",
+    "kept": "kept",
+    "left_out": "left out",
+}
+
+
+def outcome_words(outcome: str | None) -> str:
+    """What came of a circle from the previous attempt, as the window labels it."""
+    if not outcome:
+        return ""
+    return OUTCOME_WORDS.get(outcome, outcome.replace("_", " "))

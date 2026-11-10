@@ -341,3 +341,11 @@ def test_the_notes_show_what_a_redo_did_and_never_a_bare_flag():
     notes = bundle_notes(older)
     assert "True" not in notes and "not coming right" in notes[-1]
     assert bundle_notes({}) == []
+
+
+def test_what_came_of_a_circle_is_labelled_in_words():
+    from percell4.workflows.analyzeit_review.session import outcome_words
+
+    assert outcome_words("left_out") == "left out"
+    assert outcome_words("replaced") == "replaced"
+    assert outcome_words(None) == ""

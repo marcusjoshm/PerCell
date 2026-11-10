@@ -57,6 +57,7 @@ from percell4.workflows.analyzeit_review.session import (
     FieldImages,
     ReviewSession,
     bundle_notes,
+    outcome_words,
 )
 
 logger = logging.getLogger(__name__)
@@ -198,7 +199,7 @@ class NapariReviewRenderer:
             edge_color=vp.ANALYZEIT_REVIEW_PREVIOUS_COLOR,
             edge_width=vp.ANALYZEIT_REVIEW_EDGE_WIDTH,
             face_color=list(vp.ANALYZEIT_REVIEW_FACE_COLOR),
-            features={"outcome": [c.get("outcome", "") for c in circles]},
+            features={"outcome": [outcome_words(c.get("outcome")) for c in circles]},
             text={"string": "{outcome}", "color": vp.ANALYZEIT_REVIEW_PREVIOUS_COLOR},
             opacity=0.8,
             **place,
@@ -591,8 +592,9 @@ class ReviewWindow(QWidget):
         self.btn_send_back.setText("Decline" if kind == "proposal" else "Send back")
         has_fields = bool(session.field_names)
         self.fields_box.setVisible(has_fields)
-        self.circles_box.setVisible(has_fields and kind == "step")
-        self.not_coming_right.setVisible(kind == "step")
+        # Circles and the mark work at the final review too: they reopen the step (KTD28).
+        self.circles_box.setVisible(has_fields and kind in ("step", "final"))
+        self.not_coming_right.setVisible(kind in ("step", "final"))
         self.btn_region.setVisible(bool(session.previous_circles))
         self.words_field.clear()
         self.words_field.addItem("The whole stop", None)
@@ -601,7 +603,7 @@ class ReviewWindow(QWidget):
         self.target_row.setVisible(kind == "final")
         self.target_step.clear()
         self.target_step.addItem("(none)", None)
-        for step in bundle.get("workflow_steps") or []:
+        for step in bundle.get("reopenable_steps") or bundle.get("workflow_steps") or []:
             self.target_step.addItem(step, step)
         self._show_detail(session)
 
